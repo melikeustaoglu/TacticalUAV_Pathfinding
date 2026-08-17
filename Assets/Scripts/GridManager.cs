@@ -28,6 +28,8 @@ public class GridManager : MonoBehaviour
 
     public void CreateGrid()
     {
+        Physics.SyncTransforms();
+
         nodeDiameter = nodeRadius * 2f;
         gridSizeX = Mathf.RoundToInt(gridWorldSize.x / nodeDiameter);
         gridSizeY = Mathf.RoundToInt(gridWorldSize.y / nodeDiameter);
@@ -41,10 +43,15 @@ public class GridManager : MonoBehaviour
             for (int y = 0; y < gridSizeY; y++)
             {
                 Vector3 worldPoint = worldBottomLeft + Vector3.right * (x * nodeDiameter + nodeRadius) + Vector3.forward * (y * nodeDiameter + nodeRadius);
-                bool isWalkable = !Physics.CheckSphere(worldPoint, nodeRadius, obstacleMask);
+                // Vertical bias proportional to nodeRadius so overlap tests correctly intersect colliders
+                Vector3 overlapPoint = worldPoint + Vector3.up * (nodeRadius * 0.5f);
+                // CheckSphere with inflation margin ensures grid paths strictly maintain safety clearance envelope
+                bool isWalkable = !Physics.CheckSphere(overlapPoint, nodeRadius + 0.6f, obstacleMask);
                 grid[x, y] = new Node(isWalkable, worldPoint, x, y);
             }
         }
+
+        
     }
 
     public List<Node> GetNeighbors(Node node)

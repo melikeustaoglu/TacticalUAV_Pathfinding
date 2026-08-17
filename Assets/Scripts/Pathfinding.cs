@@ -8,6 +8,11 @@ public class Pathfinding : MonoBehaviour
     private LineRenderer pathLineRenderer;
 
     public List<Node> path = new List<Node>();
+    public List<Node> rawPath = new List<Node>();
+
+    [Header("Path Smoothing")]
+    [SerializeField] private bool enableSmoothing = true;
+    [SerializeField] private float smoothingSafetyRadius = 1.2f;
 
     [Header("Path Visualization")]
     [SerializeField] private Color pathLineColor = Color.cyan;
@@ -48,8 +53,62 @@ public class Pathfinding : MonoBehaviour
             return;
 
         ResetAgentToSpawnPosition();
-        FindPath(startTransform.position, targetTransform.position);
+        FindInitialMissionPath(startTransform.position, targetTransform.position);
         StartMovementAlongPath();
+    }
+
+    /// <summary>
+    /// Generates the initial baseline direct mission trajectory along the grid line
+    /// prior to in-flight dynamic obstacle discovery.
+    /// </summary>
+    public void FindInitialMissionPath(Vector3 startPos, Vector3 targetPos)
+    {
+        Node startNode = gridManager.NodeFromWorldPoint(startPos);
+        Node targetNode = gridManager.NodeFromWorldPoint(targetPos);
+
+        List<Node> directPath = new List<Node>();
+        int x0 = startNode.gridX;
+        int y0 = startNode.gridY;
+        int x1 = targetNode.gridX;
+        int y1 = targetNode.gridY;
+
+        int dx = Mathf.Abs(x1 - x0);
+        int dy = Mathf.Abs(y1 - y0);
+        int sx = x0 < x1 ? 1 : -1;
+        int sy = y0 < y1 ? 1 : -1;
+        int err = dx - dy;
+
+        int cx = x0;
+        int cy = y0;
+
+        while (true)
+        {
+            if (cx >= 0 && cx < gridManager.grid.GetLength(0) && cy >= 0 && cy < gridManager.grid.GetLength(1))
+            {
+                if (cx != x0 || cy != y0)
+                {
+                    directPath.Add(gridManager.grid[cx, cy]);
+                }
+            }
+
+            if (cx == x1 && cy == y1)
+                break;
+
+            int e2 = 2 * err;
+            if (e2 > -dy)
+            {
+                err -= dy;
+                cx += sx;
+            }
+            if (e2 < dx)
+            {
+                err += dx;
+                cy += sy;
+            }
+        }
+
+        path = directPath;
+        UpdatePathLineRenderer(path, GetLineStartPosition(startPos));
     }
 
     private void ResetAgentToSpawnPosition()
@@ -162,9 +221,71 @@ public class Pathfinding : MonoBehaviour
             currentNode = currentNode.parent;
         }
 
+        newPath.Add(startNode);
         newPath.Reverse();
-        path = newPath;
+
+        rawPath = new List<Node>(newPath);
+        List<Node> smoothed = enableSmoothing ? SmoothPath(newPath) : newPath;
+
+        if (smoothed.Count > 1 && Vector3.Distance(startNode.worldPosition, smoothed[0].worldPosition) < 0.2f)
+        {
+            smoothed.RemoveAt(0);
+        }
+
+        path = smoothed;
         UpdatePathLineRenderer(path, GetLineStartPosition(startNode.worldPosition));
+    }
+
+    /// <summary>
+    /// Smooths a raw grid-based A* node sequence into a minimal set of direct flight waypoints
+    /// by pruning redundant intermediate nodes using physical safety corridor capsule checks.
+    /// </summary>
+    public List<Node> SmoothPath(List<Node> inputPath)
+    {
+        if (inputPath == null || inputPath.Count <= 2)
+            return inputPath != null ? new List<Node>(inputPath) : new List<Node>();
+
+        List<Node> smoothed = new List<Node>(inputPath.Count);
+        smoothed.Add(inputPath[0]);
+
+        int currentIndex = 0;
+
+        while (currentIndex < inputPath.Count - 1)
+        {
+            int furthestIndex = currentIndex + 1;
+
+            // Greedily find the furthest waypoint that has a 100% collision-free clearance corridor
+            for (int candidateIndex = inputPath.Count - 1; candidateIndex > currentIndex; candidateIndex--)
+            {
+                if (IsCorridorClear(inputPath[currentIndex].worldPosition, inputPath[candidateIndex].worldPosition))
+                {
+                    furthestIndex = candidateIndex;
+                    break;
+                }
+            }
+
+            smoothed.Add(inputPath[furthestIndex]);
+            currentIndex = furthestIndex;
+        }
+
+        return smoothed;
+    }
+
+    /// <summary>
+    /// Verifies whether the direct cylindrical flight corridor between two points is 100% free of obstacles
+    /// while strictly maintaining the configured smoothing safety radius.
+    /// </summary>
+    public bool IsCorridorClear(Vector3 start, Vector3 end)
+    {
+        if (gridManager == null)
+            return false;
+
+        Vector3 p1 = new Vector3(start.x, 0.5f, start.z);
+        Vector3 p2 = new Vector3(end.x, 0.5f, end.z);
+
+        // CheckCapsule tests a swept sphere (capsule) of radius smoothingSafetyRadius against obstacle colliders
+        bool hasObstacle = Physics.CheckCapsule(p1, p2, smoothingSafetyRadius, gridManager.obstacleMask);
+        return !hasObstacle;
     }
 
     public void UpdatePathLineRenderer(List<Node> nodes, Vector3 lineStartPosition)
@@ -267,6 +388,21 @@ public class Pathfinding : MonoBehaviour
 
     private void DrawPathGizmos()
     {
+        // 1. Draw Raw A* Grid Path (faint gray wire cubes) if smoothing is active
+        if (enableSmoothing && rawPath != null && rawPath.Count > 0)
+        {
+            Gizmos.color = new Color(0.6f, 0.6f, 0.6f, 0.35f);
+            for (int i = 0; i < rawPath.Count; i++)
+            {
+                Gizmos.DrawWireCube(rawPath[i].worldPosition, Vector3.one * 0.3f);
+                if (i > 0)
+                {
+                    Gizmos.DrawLine(rawPath[i - 1].worldPosition, rawPath[i].worldPosition);
+                }
+            }
+        }
+
+        // 2. Draw Active Smoothed Path (Cyan solid cubes + flight segments)
         if (path == null || path.Count == 0)
             return;
 

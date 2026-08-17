@@ -23,6 +23,7 @@ public class PathfindingRuntimeSetup : MonoBehaviour
 
         gridManager.CreateGrid();
         SpawnAndRegisterUav(pathfinding);
+        pathfinding.FindTestPath();
     }
 
     private static void SpawnAndRegisterUav(Pathfinding pathfinding)

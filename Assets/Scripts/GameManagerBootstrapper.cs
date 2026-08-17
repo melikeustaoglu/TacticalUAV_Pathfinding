@@ -30,6 +30,9 @@ public static class GameManagerBootstrapper
 
         ApplyBrightMaterial(uavObject);
         uavObject.AddComponent<PathFollower>();
+        uavObject.AddComponent<UAVPerception>();
+        uavObject.AddComponent<ThreatAssessment>();
+        uavObject.AddComponent<ReplanningController>();
 
         return uavObject;
     }
