@@ -7,7 +7,7 @@ public static class GameManagerBootstrapper
     public static readonly Vector3 DefaultTargetPosition = new Vector3(10f, 1f, 10f);
     public static readonly Color UavColor = new Color(1f, 0.1f, 0.1f);
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
     {
         if (GameObject.Find(SystemObjectName) != null)
@@ -34,6 +34,9 @@ public static class GameManagerBootstrapper
         uavObject.AddComponent<ThreatAssessment>();
         uavObject.AddComponent<ReplanningController>();
         uavObject.AddComponent<MissionManager>();
+        uavObject.AddComponent<TacticalHUD>();
+        uavObject.AddComponent<MissionEventLogger>();
+        uavObject.AddComponent<BenchmarkReporter>();
 
         return uavObject;
     }

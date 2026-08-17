@@ -69,6 +69,7 @@ public class MissionManager : MonoBehaviour
     // Public Read-Only State & Telemetry
     public MissionState State { get; private set; } = MissionState.Pending;
     public MissionResult? Result { get; private set; }
+    public MissionScore? Score { get; private set; }
     public bool IsActive => State == MissionState.Navigating || State == MissionState.Rerouting;
 
     public float TotalFlightTime => IsActive ? (Time.time - missionStartTime) : totalFlightTime;
@@ -316,7 +317,7 @@ public class MissionManager : MonoBehaviour
 
         if (IsTerminalState(State))
         {
-            totalFlightTime = missionStartTime > 0f ? (Time.time - missionStartTime) : 0f;
+            totalFlightTime = missionStartTime >= 0f ? (Time.time - missionStartTime) : 0f;
             int replans = replanningController != null ? replanningController.ReplanCount : 0;
             float efficiency = totalDistanceTraveled > 0.0001f ? (plannedPathDistance / totalDistanceTraveled) : 0f;
 
@@ -334,6 +335,10 @@ public class MissionManager : MonoBehaviour
 
             Result = result;
 
+            float nominalSpeed = pathFollower != null ? pathFollower.MoveSpeed : 1.5f;
+            MissionScore score = MissionScore.Evaluate(result, nominalSpeed);
+            Score = score;
+
             string clearanceStr = float.IsPositiveInfinity(minimumClearanceObserved)
                 ? "N/A"
                 : $"{minimumClearanceObserved:F2}m";
@@ -349,7 +354,8 @@ public class MissionManager : MonoBehaviour
                 $"Replans={result.TotalReplans}\n" +
                 $"Threats={result.TotalThreatEncounters}\n" +
                 $"CriticalThreats={result.CriticalThreatCount}\n" +
-                $"MinClearance={clearanceStr}");
+                $"MinClearance={clearanceStr}\n" +
+                $"Score={score.OverallScore:F1} (Safety:{score.SafetyScore:F1}, Eff:{score.EfficiencyScore:F1}, Nav:{score.NavigationScore:F1}, Threat:{score.ThreatManagementScore:F1}, Time:{score.TimeScore:F1})");
 
             OnMissionCompleted?.Invoke(result);
         }
