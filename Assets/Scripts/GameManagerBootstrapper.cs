@@ -33,6 +33,7 @@ public static class GameManagerBootstrapper
         uavObject.AddComponent<UAVPerception>();
         uavObject.AddComponent<ThreatAssessment>();
         uavObject.AddComponent<ReplanningController>();
+        uavObject.AddComponent<MissionManager>();
 
         return uavObject;
     }

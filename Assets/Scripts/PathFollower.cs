@@ -27,6 +27,10 @@ public class PathFollower : MonoBehaviour
     public IReadOnlyList<Node> RemainingPath => (currentPath != null && pathIndex < currentPath.Count)
         ? currentPath.GetRange(pathIndex, currentPath.Count - pathIndex)
         : (IReadOnlyList<Node>)Array.Empty<Node>();
+    public IReadOnlyList<Node> CurrentPath => currentPath != null ? currentPath : (IReadOnlyList<Node>)Array.Empty<Node>();
+
+    // Events
+    public event Action OnDestinationReached;
 
     public float MoveSpeed
     {
@@ -122,6 +126,7 @@ public class PathFollower : MonoBehaviour
             pathIndex++;
             if (pathIndex >= currentPath.Count)
             {
+                OnDestinationReached?.Invoke();
                 StopFollowing();
                 return;
             }
@@ -155,6 +160,7 @@ public class PathFollower : MonoBehaviour
 
         if (pathIndex >= currentPath.Count)
         {
+            OnDestinationReached?.Invoke();
             StopFollowing();
             return;
         }
