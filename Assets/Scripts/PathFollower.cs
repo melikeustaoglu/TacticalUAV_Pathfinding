@@ -9,6 +9,7 @@ public class PathFollower : MonoBehaviour
     [SerializeField] private float rotationSpeed = 8.0f;
     [SerializeField] private float nodeReachThreshold = 0.1f;
     [SerializeField] private bool useRigidbody;
+    [SerializeField] private bool showGizmos = true;
 
     private Rigidbody rb;
     private Pathfinding pathfinding;
@@ -180,5 +181,38 @@ public class PathFollower : MonoBehaviour
     private Vector3 GetTargetPosition(Node node)
     {
         return new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z);
+    }
+
+    private void OnDrawGizmos()
+    {
+        if (!showGizmos)
+            return;
+
+        Vector3 uavPos = transform.position;
+
+        // 1. Highlight Active TargetWaypoint and direct steering line
+        if (isFollowing && currentPath != null && pathIndex < currentPath.Count)
+        {
+            Vector3 target = TargetWaypoint;
+
+            // Highlight target waypoint with yellow wire sphere
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(target, 0.4f);
+
+            // Draw direct line from UAV to active waypoint
+            Gizmos.color = new Color(1f, 0.92f, 0.016f, 0.75f);
+            Gizmos.DrawLine(uavPos, target);
+        }
+
+        // 2. Draw Kinematic Velocity Vector
+        if (currentVelocity.sqrMagnitude > 0.01f)
+        {
+            Vector3 velOrigin = uavPos + Vector3.up * 0.15f;
+            Vector3 velEnd = velOrigin + currentVelocity;
+
+            Gizmos.color = Color.green;
+            Gizmos.DrawLine(velOrigin, velEnd);
+            Gizmos.DrawWireSphere(velEnd, 0.12f);
+        }
     }
 }

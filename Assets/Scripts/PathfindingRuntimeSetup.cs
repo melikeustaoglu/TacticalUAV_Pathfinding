@@ -3,9 +3,20 @@ using UnityEngine;
 [DefaultExecutionOrder(-100)]
 public class PathfindingRuntimeSetup : MonoBehaviour
 {
+    [Header("Scenario Configuration (Optional)")]
+    [SerializeField] private UAVScenarioConfig scenarioConfig;
+
+    [Header("Fallback / Direct Parameters")]
     public Vector3 startPosition;
     public Vector3 targetPosition;
     public int obstacleCount = ProceduralObstacleGenerator.DefaultObstacleCount;
+    public int seed = ProceduralObstacleGenerator.DefaultSeed;
+
+    public UAVScenarioConfig ScenarioConfig
+    {
+        get => scenarioConfig;
+        set => scenarioConfig = value;
+    }
 
     private void Start()
     {
@@ -14,23 +25,51 @@ public class PathfindingRuntimeSetup : MonoBehaviour
         if (gridManager == null || pathfinding == null)
             return;
 
+        // Apply scenario profile if assigned; otherwise preserve existing fallback parameters
+        Vector3 effectiveStart = scenarioConfig != null ? scenarioConfig.startPosition : (startPosition != Vector3.zero ? startPosition : GameManagerBootstrapper.DefaultStartPosition);
+        Vector3 effectiveTarget = scenarioConfig != null ? scenarioConfig.targetPosition : (targetPosition != Vector3.zero ? targetPosition : GameManagerBootstrapper.DefaultTargetPosition);
+        int effectiveObstacleCount = scenarioConfig != null ? scenarioConfig.obstacleCount : obstacleCount;
+        int effectiveSeed = scenarioConfig != null ? scenarioConfig.seed : seed;
+
+        // Update pathfinding markers with effective mission endpoints
+        if (pathfinding.startMarkerTransform != null)
+            pathfinding.startMarkerTransform.position = effectiveStart;
+        if (pathfinding.targetTransform != null)
+            pathfinding.targetTransform.position = effectiveTarget;
+        pathfinding.agentSpawnPosition = effectiveStart;
+
         ProceduralObstacleGenerator.Generate(
             gridManager.transform,
             gridManager.gridWorldSize,
-            startPosition,
-            targetPosition,
-            obstacleCount);
+            effectiveStart,
+            effectiveTarget,
+            effectiveObstacleCount,
+            effectiveSeed);
 
         gridManager.CreateGrid();
         SpawnAndRegisterUav(pathfinding);
         pathfinding.FindTestPath();
     }
 
-    private static void SpawnAndRegisterUav(Pathfinding pathfinding)
+    private void SpawnAndRegisterUav(Pathfinding pathfinding)
     {
         Vector3 spawnPosition = pathfinding.agentSpawnPosition;
         GameObject uavObject = GameManagerBootstrapper.CreateUav(spawnPosition);
         PathFollower pathFollower = uavObject.GetComponent<PathFollower>();
+        UAVPerception uavPerception = uavObject.GetComponent<UAVPerception>();
+
+        if (scenarioConfig != null)
+        {
+            if (pathFollower != null)
+            {
+                pathFollower.MoveSpeed = scenarioConfig.uavMoveSpeed;
+            }
+            if (uavPerception != null)
+            {
+                uavPerception.DetectionRange = scenarioConfig.sensorDetectionRange;
+            }
+        }
+
         pathfinding.RegisterAgent(uavObject.transform, pathFollower);
     }
 }

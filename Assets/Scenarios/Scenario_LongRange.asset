@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9f8e7d6c5b4a321012345678abcdef01, type: 3}
+  m_Name: Scenario_LongRange
+  m_EditorClassIdentifier: 
+  startPosition: {x: -18, y: 1, z: -12}
+  targetPosition: {x: 18, y: 1, z: 12}
+  obstacleCount: 12
+  seed: 200
+  uavMoveSpeed: 2
+  sensorDetectionRange: 12
