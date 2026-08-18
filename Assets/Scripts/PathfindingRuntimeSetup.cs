@@ -41,6 +41,11 @@ public class PathfindingRuntimeSetup : MonoBehaviour
         ObstacleDistributionMode effectiveMode = scenarioConfig != null ? scenarioConfig.distributionMode : ObstacleDistributionMode.Uniform;
         float effectiveFocusWeight = scenarioConfig != null ? scenarioConfig.corridorFocusWeight : 0.0f;
         float effectiveCorridorWidth = scenarioConfig != null ? scenarioConfig.corridorWidth : 10.0f;
+        bool effectiveEnableDynamic = scenarioConfig != null && scenarioConfig.enableDynamicObstacles;
+        int effectiveDynamicCount = scenarioConfig != null ? scenarioConfig.dynamicObstacleCount : 0;
+        float effectiveDynamicSpeed = scenarioConfig != null ? scenarioConfig.dynamicObstacleSpeed : 1.0f;
+        ObstacleMovementMode effectiveDynamicMode = scenarioConfig != null ? scenarioConfig.dynamicMovementMode : ObstacleMovementMode.Patrol;
+        PatrolLoopMode effectiveDynamicLoop = scenarioConfig != null ? scenarioConfig.dynamicLoopMode : PatrolLoopMode.PingPong;
 
         ProceduralObstacleGenerator.Generate(
             gridManager.transform,
@@ -51,7 +56,12 @@ public class PathfindingRuntimeSetup : MonoBehaviour
             effectiveSeed,
             effectiveMode,
             effectiveFocusWeight,
-            effectiveCorridorWidth);
+            effectiveCorridorWidth,
+            effectiveEnableDynamic,
+            effectiveDynamicCount,
+            effectiveDynamicSpeed,
+            effectiveDynamicMode,
+            effectiveDynamicLoop);
 
         if (scenarioConfig != null)
         {

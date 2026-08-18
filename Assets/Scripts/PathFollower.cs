@@ -92,6 +92,44 @@ public class PathFollower : MonoBehaviour
         set => rotationSpeed = Mathf.Max(0f, value);
     }
 
+    [Header("Tactical Speed Override")]
+    private bool isSpeedOverrideActive = false;
+    private float speedOverrideRatio = 1.0f;
+    private float speedOverrideEndTime = 0f;
+
+    public bool IsSpeedOverrideActive => isSpeedOverrideActive && Time.time < speedOverrideEndTime;
+    public float CurrentSpeedOverrideRatio => IsSpeedOverrideActive ? speedOverrideRatio : 1.0f;
+
+    /// <summary>
+    /// Applies a temporary tactical speed modulation (e.g. slowing down or pacing to avoid dynamic VO collision).
+    /// </summary>
+    /// <param name="speedRatio">Fraction of cruise speed [0.3, 1.2], clamped to maintain minimum 0.5 m/s.</param>
+    /// <param name="duration">Duration of override in seconds (clamped to [0.1, 10.0]).</param>
+    public void ApplyTacticalSpeedOverride(float speedRatio, float duration)
+    {
+        if (duration <= 0f)
+        {
+            ClearSpeedOverride();
+            return;
+        }
+
+        // Ensure effective speed never falls below 0.5 m/s
+        float minRatio = moveSpeed > 0.001f ? Mathf.Clamp01(0.5f / moveSpeed) : 0.5f;
+        speedOverrideRatio = Mathf.Clamp(speedRatio, minRatio, 1.2f);
+        speedOverrideEndTime = Time.time + Mathf.Clamp(duration, 0.1f, 10.0f);
+        isSpeedOverrideActive = true;
+    }
+
+    /// <summary>
+    /// Clears any active tactical speed override and restores nominal cruise speed.
+    /// </summary>
+    public void ClearSpeedOverride()
+    {
+        isSpeedOverrideActive = false;
+        speedOverrideRatio = 1.0f;
+        speedOverrideEndTime = 0f;
+    }
+
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
@@ -208,9 +246,21 @@ public class PathFollower : MonoBehaviour
             applyRotation(newRotation);
         }
 
+        // Check for speed override expiration
+        if (isSpeedOverrideActive && Time.time >= speedOverrideEndTime)
+        {
+            ClearSpeedOverride();
+        }
+
+        float effectiveCruiseSpeed = moveSpeed;
+        if (IsSpeedOverrideActive)
+        {
+            effectiveCruiseSpeed = Mathf.Max(0.5f, moveSpeed * speedOverrideRatio);
+        }
+
         // 2. Adaptive Cornering Target Speed (Immediate Heading Deviation + Lookahead Anticipation)
         float cornerFactor = Mathf.Clamp01(Mathf.Cos(headingErrorDeg * Mathf.Deg2Rad));
-        float targetSpeed = Mathf.Lerp(moveSpeed * minCornerSpeedRatio, moveSpeed, cornerFactor);
+        float targetSpeed = Mathf.Lerp(effectiveCruiseSpeed * minCornerSpeedRatio, effectiveCruiseSpeed, cornerFactor);
 
         // Lookahead: Anticipate sharp turns at upcoming waypoints and brake before reaching the corner
         if (pathIndex < currentPath.Count - 1)

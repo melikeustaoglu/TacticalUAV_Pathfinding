@@ -81,6 +81,8 @@ public class ThreatAssessment : MonoBehaviour
     // Public Read-Only State for downstream subsystems (ReplanningController)
     public ThreatLevel CurrentThreatLevel => currentReport.ThreatLevel;
     public ThreatReport CurrentThreatReport => currentReport;
+    public IReadOnlyList<ThreatReport> AllEvaluatedReports => allEvaluatedReports;
+    public IReadOnlyList<ThreatReport> ActiveThreatReports => activeThreatReports;
     public float SafetyRadius => safetyRadius;
     public float LookaheadTime => lookaheadTime;
 
@@ -91,6 +93,8 @@ public class ThreatAssessment : MonoBehaviour
     private UAVPerception perception;
     private PathFollower pathFollower;
     private ThreatReport currentReport = ThreatReport.Clear;
+    private readonly List<ThreatReport> allEvaluatedReports = new List<ThreatReport>();
+    private readonly List<ThreatReport> activeThreatReports = new List<ThreatReport>();
     private ThreatLevel lastThreatLevel = ThreatLevel.None;
     private GameObject lastCriticalObstacle = null;
     private bool wasInCriticalState = false;
@@ -114,8 +118,13 @@ public class ThreatAssessment : MonoBehaviour
         if (perception == null || pathFollower == null)
         {
             currentReport = ThreatReport.Clear;
+            allEvaluatedReports.Clear();
+            activeThreatReports.Clear();
             return;
         }
+
+        allEvaluatedReports.Clear();
+        activeThreatReports.Clear();
 
         IReadOnlyList<DetectedObstacle> obstacles = perception.DetectedObstacles;
         if (obstacles == null || obstacles.Count == 0)
@@ -191,7 +200,21 @@ public class ThreatAssessment : MonoBehaviour
                 }
             }
 
-            // Keep the most severe valid threat
+            ThreatReport report = new ThreatReport(
+                evaluatedLevel,
+                obs,
+                prediction.EstimatedCollisionPoint,
+                prediction.DistanceToCollision,
+                prediction.TimeToCollision,
+                prediction.ObstructedWaypointIndex);
+
+            allEvaluatedReports.Add(report);
+            if (evaluatedLevel >= ThreatLevel.Warning)
+            {
+                activeThreatReports.Add(report);
+            }
+
+            // Keep the most severe valid threat for currentReport
             bool shouldUpdateReport = false;
 
             if (evaluatedLevel > highestReport.ThreatLevel)
@@ -215,14 +238,14 @@ public class ThreatAssessment : MonoBehaviour
 
             if (shouldUpdateReport)
             {
-                highestReport = new ThreatReport(
-                    evaluatedLevel,
-                    obs,
-                    prediction.EstimatedCollisionPoint,
-                    prediction.DistanceToCollision,
-                    prediction.TimeToCollision,
-                    prediction.ObstructedWaypointIndex);
+                highestReport = report;
             }
+        }
+
+        // Sort active threats with highest severity first
+        if (activeThreatReports.Count > 1)
+        {
+            activeThreatReports.Sort((a, b) => b.ThreatLevel.CompareTo(a.ThreatLevel));
         }
 
         currentReport = highestReport;

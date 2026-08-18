@@ -16,6 +16,8 @@ public struct DetectedObstacle
     public float Distance { get; }
     public float AngleFromHeading { get; }
     public Vector3 SurfaceNormal { get; }
+    public Vector3 Velocity { get; }
+    public bool IsDynamic { get; }
 
     public DetectedObstacle(
         GameObject gameObject,
@@ -25,7 +27,9 @@ public struct DetectedObstacle
         Vector3 direction,
         float distance,
         float angleFromHeading,
-        Vector3 surfaceNormal)
+        Vector3 surfaceNormal,
+        Vector3 velocity = default,
+        bool isDynamic = false)
     {
         GameObject = gameObject;
         Collider = collider;
@@ -35,6 +39,8 @@ public struct DetectedObstacle
         Distance = distance;
         AngleFromHeading = angleFromHeading;
         SurfaceNormal = surfaceNormal;
+        Velocity = velocity;
+        IsDynamic = isDynamic;
     }
 }
 
@@ -159,6 +165,16 @@ public class UAVPerception : MonoBehaviour
                         candidate.transform.IsChildOf(hit.collider.transform))
                     {
                         Vector3 relativePos = transform.InverseTransformPoint(hit.point);
+
+                        DynamicObstacle dynamicComp = hit.collider.GetComponentInParent<DynamicObstacle>();
+                        Vector3 obstacleVelocity = Vector3.zero;
+                        bool isDynamic = false;
+                        if (dynamicComp != null && dynamicComp.MovementEnabled)
+                        {
+                            obstacleVelocity = dynamicComp.CurrentVelocity;
+                            isDynamic = true;
+                        }
+
                         DetectedObstacle obstacle = new DetectedObstacle(
                             hit.collider.gameObject,
                             hit.collider,
@@ -167,7 +183,9 @@ public class UAVPerception : MonoBehaviour
                             direction,
                             hit.distance,
                             angle,
-                            hit.normal
+                            hit.normal,
+                            obstacleVelocity,
+                            isDynamic
                         );
 
                         detectedObstacles.Add(obstacle);

@@ -1,5 +1,56 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+
+/// <summary>
+/// Encapsulates a spatial hazard footprint for dynamic moving obstacles during pathfinding search and smoothing.
+/// Supports time-projected forward motion corridors for moving threats.
+/// </summary>
+[Serializable]
+public struct DynamicHazard
+{
+    public Vector3 Position { get; }
+    public float Radius { get; }
+    public Vector3 Velocity { get; }
+    public bool IsDynamic { get; }
+    public float ProjectedHorizonTime { get; }
+
+    public DynamicHazard(Vector3 position, float radius, Vector3 velocity = default, bool isDynamic = true, float projectedHorizonTime = 0f)
+    {
+        Position = position;
+        Radius = radius;
+        Velocity = velocity;
+        IsDynamic = isDynamic;
+        ProjectedHorizonTime = Mathf.Max(0f, projectedHorizonTime);
+    }
+
+    /// <summary>
+    /// Calculates the minimum 2D horizontal distance from a test point to this hazard's position or projected motion corridor.
+    /// </summary>
+    public float DistanceToHazard2D(Vector3 testPoint)
+    {
+        Vector3 pFlat = new Vector3(testPoint.x, 0f, testPoint.z);
+        Vector3 startFlat = new Vector3(Position.x, 0f, Position.z);
+
+        if (!IsDynamic || Velocity.sqrMagnitude < 0.01f || ProjectedHorizonTime < 0.01f)
+        {
+            return Vector3.Distance(pFlat, startFlat);
+        }
+
+        Vector3 endFlat = startFlat + new Vector3(Velocity.x, 0f, Velocity.z) * ProjectedHorizonTime;
+        Vector3 seg = endFlat - startFlat;
+        float segLenSq = seg.sqrMagnitude;
+
+        if (segLenSq < 1e-4f)
+        {
+            return Vector3.Distance(pFlat, startFlat);
+        }
+
+        float t = Mathf.Clamp01(Vector3.Dot(pFlat - startFlat, seg) / segLenSq);
+        Vector3 closestOnSeg = startFlat + seg * t;
+        return Vector3.Distance(pFlat, closestOnSeg);
+    }
+}
 
 [RequireComponent(typeof(GridManager))]
 public class Pathfinding : MonoBehaviour
@@ -141,7 +192,20 @@ public class Pathfinding : MonoBehaviour
         FindPath(startPos, targetPos);
     }
 
-    public void FindPath(Vector3 startPos, Vector3 targetPos)
+    public void FindPath(Vector3 startPos, Vector3 targetPos, Vector3? dynamicHazardPosition = null, float dynamicHazardRadius = 0f)
+    {
+        if (dynamicHazardPosition.HasValue && dynamicHazardRadius > 0.001f)
+        {
+            DynamicHazard[] hazards = new DynamicHazard[] { new DynamicHazard(dynamicHazardPosition.Value, dynamicHazardRadius) };
+            FindPath(startPos, targetPos, (IReadOnlyList<DynamicHazard>)hazards);
+        }
+        else
+        {
+            FindPath(startPos, targetPos, (IReadOnlyList<DynamicHazard>)null);
+        }
+    }
+
+    public void FindPath(Vector3 startPos, Vector3 targetPos, IReadOnlyList<DynamicHazard> dynamicHazards)
     {
         Node startNode = gridManager.NodeFromWorldPoint(startPos);
         Node targetNode = gridManager.NodeFromWorldPoint(targetPos);
@@ -173,7 +237,7 @@ public class Pathfinding : MonoBehaviour
 
             if (currentNode == targetNode)
             {
-                RetracePath(startNode, targetNode);
+                RetracePath(startNode, targetNode, dynamicHazards);
                 return;
             }
 
@@ -181,6 +245,28 @@ public class Pathfinding : MonoBehaviour
             {
                 if (!neighbor.isWalkable || closedSet.Contains(neighbor))
                     continue;
+
+                // Temporary compound dynamic hazard footprint exclusion (scoped to this replan only)
+                if (dynamicHazards != null && dynamicHazards.Count > 0 && neighbor != startNode && neighbor != targetNode)
+                {
+                    bool isHazardBlocked = false;
+
+                    for (int h = 0; h < dynamicHazards.Count; h++)
+                    {
+                        DynamicHazard hazard = dynamicHazards[h];
+                        if (hazard.Radius > 0.001f)
+                        {
+                            if (hazard.DistanceToHazard2D(neighbor.worldPosition) < hazard.Radius)
+                            {
+                                isHazardBlocked = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (isHazardBlocked)
+                        continue; // Skip nodes inside any dynamic threat footprint
+                }
 
                 int newCostToNeighbor = currentNode.gCost + GetDistance(currentNode, neighbor) + neighbor.clearancePenalty;
                 if (newCostToNeighbor < neighbor.gCost || !openSet.Contains(neighbor))
@@ -205,7 +291,7 @@ public class Pathfinding : MonoBehaviour
         ClearPathLineRenderer();
     }
 
-    private void RetracePath(Node startNode, Node endNode)
+    private void RetracePath(Node startNode, Node endNode, IReadOnlyList<DynamicHazard> dynamicHazards = null)
     {
         List<Node> newPath = new List<Node>();
         Node currentNode = endNode;
@@ -220,7 +306,7 @@ public class Pathfinding : MonoBehaviour
         newPath.Reverse();
 
         rawPath = new List<Node>(newPath);
-        List<Node> smoothed = enableSmoothing ? SmoothPath(newPath) : newPath;
+        List<Node> smoothed = enableSmoothing ? SmoothPath(newPath, dynamicHazards) : newPath;
 
         if (smoothed.Count > 1 && Vector3.Distance(startNode.worldPosition, smoothed[0].worldPosition) < 0.2f)
         {
@@ -231,11 +317,21 @@ public class Pathfinding : MonoBehaviour
         UpdatePathLineRenderer(path, GetLineStartPosition(startNode.worldPosition));
     }
 
+    public List<Node> SmoothPath(List<Node> inputPath, Vector3? dynamicHazardPosition, float dynamicHazardRadius = 0f)
+    {
+        if (dynamicHazardPosition.HasValue && dynamicHazardRadius > 0.001f)
+        {
+            DynamicHazard[] hazards = new DynamicHazard[] { new DynamicHazard(dynamicHazardPosition.Value, dynamicHazardRadius) };
+            return SmoothPath(inputPath, (IReadOnlyList<DynamicHazard>)hazards);
+        }
+        return SmoothPath(inputPath, (IReadOnlyList<DynamicHazard>)null);
+    }
+
     /// <summary>
     /// Smooths a raw grid-based A* node sequence into a minimal set of direct flight waypoints
-    /// by pruning redundant intermediate nodes using physical safety corridor capsule checks.
+    /// by pruning redundant intermediate nodes using physical safety corridor capsule checks and multi-hazard clearance.
     /// </summary>
-    public List<Node> SmoothPath(List<Node> inputPath)
+    public List<Node> SmoothPath(List<Node> inputPath, IReadOnlyList<DynamicHazard> dynamicHazards = null)
     {
         if (inputPath == null || inputPath.Count <= 2)
             return inputPath != null ? new List<Node>(inputPath) : new List<Node>();
@@ -252,7 +348,7 @@ public class Pathfinding : MonoBehaviour
             // Greedily find the furthest waypoint that has a 100% collision-free clearance corridor
             for (int candidateIndex = inputPath.Count - 1; candidateIndex > currentIndex; candidateIndex--)
             {
-                if (IsCorridorClear(inputPath[currentIndex].worldPosition, inputPath[candidateIndex].worldPosition))
+                if (IsCorridorClear(inputPath[currentIndex].worldPosition, inputPath[candidateIndex].worldPosition, dynamicHazards))
                 {
                     furthestIndex = candidateIndex;
                     break;
@@ -266,11 +362,21 @@ public class Pathfinding : MonoBehaviour
         return smoothed;
     }
 
+    public bool IsCorridorClear(Vector3 start, Vector3 end, Vector3? dynamicHazardPosition, float dynamicHazardRadius = 0f)
+    {
+        if (dynamicHazardPosition.HasValue && dynamicHazardRadius > 0.001f)
+        {
+            DynamicHazard[] hazards = new DynamicHazard[] { new DynamicHazard(dynamicHazardPosition.Value, dynamicHazardRadius) };
+            return IsCorridorClear(start, end, (IReadOnlyList<DynamicHazard>)hazards);
+        }
+        return IsCorridorClear(start, end, (IReadOnlyList<DynamicHazard>)null);
+    }
+
     /// <summary>
     /// Verifies whether the direct cylindrical flight corridor between two points is 100% free of obstacles
-    /// while strictly maintaining the configured smoothing safety radius.
+    /// while strictly maintaining the configured smoothing safety radius and compound dynamic hazard buffers.
     /// </summary>
-    public bool IsCorridorClear(Vector3 start, Vector3 end)
+    public bool IsCorridorClear(Vector3 start, Vector3 end, IReadOnlyList<DynamicHazard> dynamicHazards = null)
     {
         if (gridManager == null)
             return false;
@@ -278,9 +384,41 @@ public class Pathfinding : MonoBehaviour
         Vector3 p1 = new Vector3(start.x, 0.5f, start.z);
         Vector3 p2 = new Vector3(end.x, 0.5f, end.z);
 
-        // CheckCapsule tests a swept sphere (capsule) of radius smoothingSafetyRadius against obstacle colliders
+        // 1. Physics capsule check against static colliders
         bool hasObstacle = Physics.CheckCapsule(p1, p2, smoothingSafetyRadius, gridManager.obstacleMask);
-        return !hasObstacle;
+        if (hasObstacle)
+            return false;
+
+        // 2. Compound dynamic hazard envelope check
+        if (dynamicHazards != null && dynamicHazards.Count > 0)
+        {
+            Vector3 seg = p2 - p1;
+            float segLen = seg.magnitude;
+            if (segLen > 0.001f)
+            {
+                Vector3 segDir = seg / segLen;
+
+                for (int h = 0; h < dynamicHazards.Count; h++)
+                {
+                    DynamicHazard hazard = dynamicHazards[h];
+                    if (hazard.Radius > 0.001f)
+                    {
+                        Vector3 hazardFlat = new Vector3(hazard.Position.x, 0.5f, hazard.Position.z);
+                        Vector3 toHazard = hazardFlat - p1;
+                        float proj = Mathf.Clamp(Vector3.Dot(toHazard, segDir), 0f, segLen);
+                        Vector3 closestPoint = p1 + segDir * proj;
+                        float distToSegment = hazard.DistanceToHazard2D(closestPoint);
+
+                        if (distToSegment < (hazard.Radius + smoothingSafetyRadius))
+                        {
+                            return false; // Corridor passes too close to dynamic hazard footprint
+                        }
+                    }
+                }
+            }
+        }
+
+        return true;
     }
 
     public void UpdatePathLineRenderer(List<Node> nodes, Vector3 lineStartPosition)

@@ -32,6 +32,9 @@ public class MissionBenchmarkReport
 
     [Header("Tactical Counters")]
     public int replans;
+    public int speedPacingResolutions;
+    public int spatialDetours;
+    public int peakSimultaneousThreats;
     public int threatEncounters;
     public int criticalThreats;
     public float minimumClearance;
@@ -64,6 +67,7 @@ public class BenchmarkReporter : MonoBehaviour
     private MissionEventLogger eventLogger;
     private PathFollower pathFollower;
     private UAVPerception perception;
+    private ReplanningController replanningController;
 
     public MissionBenchmarkReport LastReport { get; private set; }
     public string LastReportJson { get; private set; }
@@ -75,6 +79,7 @@ public class BenchmarkReporter : MonoBehaviour
         eventLogger = GetComponent<MissionEventLogger>() ?? FindFirstObjectByType<MissionEventLogger>();
         pathFollower = GetComponent<PathFollower>() ?? FindFirstObjectByType<PathFollower>();
         perception = GetComponent<UAVPerception>() ?? FindFirstObjectByType<UAVPerception>();
+        replanningController = GetComponent<ReplanningController>() ?? FindFirstObjectByType<ReplanningController>();
     }
 
     private void OnEnable()
@@ -118,6 +123,10 @@ public class BenchmarkReporter : MonoBehaviour
     {
         PathfindingRuntimeSetup setup = FindFirstObjectByType<PathfindingRuntimeSetup>();
         UAVScenarioConfig cfg = setup != null ? setup.ScenarioConfig : null;
+        if (replanningController == null)
+        {
+            replanningController = GetComponent<ReplanningController>() ?? FindFirstObjectByType<ReplanningController>();
+        }
 
         MissionBenchmarkReport report = new MissionBenchmarkReport();
 
@@ -139,6 +148,9 @@ public class BenchmarkReporter : MonoBehaviour
         report.plannedDistance = result.PlannedPathDistance;
         report.pathEfficiency = result.PathEfficiency;
         report.replans = result.TotalReplans;
+        report.speedPacingResolutions = replanningController != null ? replanningController.SpeedPacingCount : 0;
+        report.spatialDetours = replanningController != null ? replanningController.SpatialReplanCount : result.TotalReplans;
+        report.peakSimultaneousThreats = replanningController != null ? replanningController.PeakSimultaneousThreats : 0;
         report.threatEncounters = result.TotalThreatEncounters;
         report.criticalThreats = result.CriticalThreatCount;
         report.minimumClearance = result.MinimumClearanceObserved;

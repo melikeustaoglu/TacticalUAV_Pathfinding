@@ -156,7 +156,7 @@ public class TacticalHUD : MonoBehaviour
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
         panelRect.anchoredPosition = new Vector2(28f, -28f);
-        panelRect.sizeDelta = new Vector2(460f, 660f);
+        panelRect.sizeDelta = new Vector2(460f, 720f);
 
         backgroundPanel = hudPanelObject.AddComponent<Image>();
         backgroundPanel.color = new Color(0.05f, 0.08f, 0.12f, 0.94f); // Deep Tactical Dark Slate
@@ -223,28 +223,28 @@ public class TacticalHUD : MonoBehaviour
         stateBadgeText.alignment = TextAnchor.MiddleCenter;
         stateBadgeText.color = Color.white;
 
-        // 5. Visual Mission Progress Bar Container
+        // 5. Mission Progress Bar Container
         GameObject progressContainer = new GameObject("Progress_Container");
         progressContainer.transform.SetParent(hudPanelObject.transform, false);
-        RectTransform progContRect = progressContainer.AddComponent<RectTransform>();
-        progContRect.anchorMin = new Vector2(0f, 1f);
-        progContRect.anchorMax = new Vector2(1f, 1f);
-        progContRect.pivot = new Vector2(0.5f, 1f);
-        progContRect.anchoredPosition = new Vector2(0f, -86f);
-        progContRect.sizeDelta = new Vector2(-28f, 24f);
+        RectTransform progRect = progressContainer.AddComponent<RectTransform>();
+        progRect.anchorMin = new Vector2(0f, 1f);
+        progRect.anchorMax = new Vector2(1f, 1f);
+        progRect.pivot = new Vector2(0.5f, 1f);
+        progRect.anchoredPosition = new Vector2(0f, -86f);
+        progRect.sizeDelta = new Vector2(-28f, 22f);
 
         Image progBg = progressContainer.AddComponent<Image>();
-        progBg.color = new Color(0.08f, 0.13f, 0.20f, 0.95f);
+        progBg.color = new Color(0.06f, 0.10f, 0.16f, 0.95f);
 
-        // Progress Bar Fill
+        // Progress Bar Fill Image
         GameObject fillObj = new GameObject("Progress_Fill");
         fillObj.transform.SetParent(progressContainer.transform, false);
         progressBarFillRect = fillObj.AddComponent<RectTransform>();
         progressBarFillRect.anchorMin = new Vector2(0f, 0f);
         progressBarFillRect.anchorMax = new Vector2(0f, 1f);
         progressBarFillRect.pivot = new Vector2(0f, 0.5f);
-        progressBarFillRect.anchoredPosition = Vector2.zero;
-        progressBarFillRect.sizeDelta = Vector2.zero;
+        progressBarFillRect.offsetMin = Vector2.zero;
+        progressBarFillRect.offsetMax = Vector2.zero;
 
         Image fillImg = fillObj.AddComponent<Image>();
         fillImg.color = new Color(0.0f, 0.78f, 1.0f, 0.92f); // Bright Neon Cyan Fill
@@ -273,7 +273,7 @@ public class TacticalHUD : MonoBehaviour
         telemetryRect.anchorMax = new Vector2(1f, 1f);
         telemetryRect.pivot = new Vector2(0.5f, 1f);
         telemetryRect.anchoredPosition = new Vector2(0f, -118f);
-        telemetryRect.sizeDelta = new Vector2(-32f, 350f);
+        telemetryRect.sizeDelta = new Vector2(-32f, 410f);
 
         telemetryText = telemetryObj.AddComponent<Text>();
         telemetryText.font = defaultFont;
@@ -362,12 +362,48 @@ public class TacticalHUD : MonoBehaviour
         float efficiencyPct = missionManager.PathEfficiency * 100f;
         string effColor = efficiencyPct >= 85f ? "#33FF88" : (efficiencyPct >= 70f ? "#FFCC33" : "#FF6644");
 
+        int activeThreatsCount = threatAssessment != null && threatAssessment.ActiveThreatReports != null
+            ? threatAssessment.ActiveThreatReports.Count
+            : (threatLevel >= ThreatLevel.Warning ? 1 : 0);
+        int peakThreats = replanningController != null ? replanningController.PeakSimultaneousThreats : activeThreatsCount;
+        int pacingCount = replanningController != null ? replanningController.SpeedPacingCount : 0;
+        int spatialCount = replanningController != null ? replanningController.SpatialReplanCount : (replanningController != null ? replanningController.ReplanCount : missionManager.TotalReplans);
+        int totalReplans = replanningController != null ? replanningController.ReplanCount : missionManager.TotalReplans;
+
+        string speedStr = $"<color=#00FFAA><b>{currentSpeed:F2}</b> m/s</color>";
+        if (pathFollower != null && pathFollower.IsSpeedOverrideActive)
+        {
+            speedStr += $" <color=#FFAA00>[VO Pacing: {pathFollower.CurrentSpeedOverrideRatio * 100f:F0}%]</color>";
+        }
+
+        string evasionModeStr = "<color=#33FF88>NORMAL</color>";
+        if (replanningController != null)
+        {
+            switch (replanningController.State)
+            {
+                case NavigationState.ThreatDetected:
+                    evasionModeStr = "<color=#FFFF44>THREAT TRACKING</color>";
+                    break;
+                case NavigationState.Replanning:
+                    evasionModeStr = "<color=#FF4444>SPATIAL REPLANNING</color>";
+                    break;
+                case NavigationState.Rerouting:
+                    evasionModeStr = pathFollower != null && pathFollower.IsSpeedOverrideActive
+                        ? "<color=#FFAA00>VO SPEED PACING</color>"
+                        : "<color=#00FFFF>A* DETOUR EXECUTION</color>";
+                    break;
+                case NavigationState.NoSafePath:
+                    evasionModeStr = "<color=#FF2222>SAFE HOLD</color>";
+                    break;
+            }
+        }
+
         // Build Telemetry Block with High-Contrast Typography
         telemetrySb.Clear();
         telemetrySb.AppendLine("<color=#5EC8FF><b>── MISSION & NAVIGATION ─────────────────</b></color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Position:</color></b>      <color=#FFFFFF>X: <b>{uavPos.x,6:F2}</b> m,  Z: <b>{uavPos.z,6:F2}</b> m</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Target:</color></b>        <color=#FFFFFF>X: <b>{targetPos.x,6:F2}</b> m,  Z: <b>{targetPos.z,6:F2}</b> m</color>");
-        telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Speed:</color></b>  <color=#00FFAA><b>{currentSpeed:F2}</b> m/s</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Speed:</color></b>  {speedStr}");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Time:</color></b>   <color=#FFFFFF><b>{missionManager.TotalFlightTime:F2}</b> s</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Distance:</color></b>      <color=#FFFFFF><b>{missionManager.TotalDistanceTraveled:F2}</b> m</color>  <color=#88A2BF>(Plan: {missionManager.PlannedPathDistance:F2} m)</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Path Efficiency:</color></b><color={effColor}> <b>{efficiencyPct:F1} %</b></color>");
@@ -375,7 +411,9 @@ public class TacticalHUD : MonoBehaviour
         telemetrySb.AppendLine();
         telemetrySb.AppendLine("<color=#5EC8FF><b>── TACTICAL & THREAT ENCOUNTERS ─────────</b></color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Status:</color></b>   {threatBadgeStr}");
-        telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{missionManager.TotalReplans}</b></color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Active Threats:</color></b>  <color=#FFFFFF><b>{activeThreatsCount}</b></color>  <color=#88A2BF>(Peak: {peakThreats})</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Evasion Mode:</color></b>    {evasionModeStr}");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{totalReplans}</b></color>  <color=#88A2BF>(Pacing: {pacingCount} | Spatial: {spatialCount})</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Events:</color></b>   <color=#FFFFFF><b>{missionManager.TotalThreatEncounters}</b></color>  <color=#88A2BF>({missionManager.CriticalThreatCount} Critical)</color>");
 
         string clearanceStr = float.IsPositiveInfinity(missionManager.MinimumClearanceObserved)

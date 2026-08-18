@@ -31,7 +31,12 @@ public static class ProceduralObstacleGenerator
         int seed = DefaultSeed,
         ObstacleDistributionMode distributionMode = ObstacleDistributionMode.Uniform,
         float corridorFocusWeight = 0.0f,
-        float corridorWidth = 10.0f)
+        float corridorWidth = 10.0f,
+        bool enableDynamicObstacles = false,
+        int dynamicObstacleCount = 0,
+        float dynamicObstacleSpeed = 1.0f,
+        ObstacleMovementMode dynamicMovementMode = ObstacleMovementMode.Patrol,
+        PatrolLoopMode dynamicLoopMode = PatrolLoopMode.PingPong)
     {
         int obstacleLayer = LayerMask.NameToLayer(ObstacleLayerName);
         if (obstacleLayer < 0)
@@ -147,6 +152,27 @@ public static class ProceduralObstacleGenerator
             float size = (float)(1.2 + rng.NextDouble() * 1.3);
             SpawnObstacle(obstaclesParent.transform, candidatePosition, size, ++spawnedCount, obstacleLayer);
             spawnedPositions.Add(candidatePosition);
+        }
+
+        // 3. Attach and configure DynamicObstacle components if dynamic threats are enabled
+        if (enableDynamicObstacles && dynamicObstacleCount > 0)
+        {
+            int dynamicAssigned = 0;
+            for (int i = 0; i < obstaclesParent.transform.childCount && dynamicAssigned < dynamicObstacleCount; i++)
+            {
+                Transform child = obstaclesParent.transform.GetChild(i);
+                DynamicObstacle dyn = child.gameObject.AddComponent<DynamicObstacle>();
+                dyn.MovementMode = dynamicMovementMode;
+                dyn.LoopMode = dynamicLoopMode;
+                dyn.Speed = dynamicObstacleSpeed;
+                dyn.MovementEnabled = true;
+
+                Vector3 basePos = child.position;
+                Vector3 wpA = basePos - perp * 3.5f;
+                Vector3 wpB = basePos + perp * 3.5f;
+                dyn.SetPatrolWaypoints(wpA, wpB);
+                dynamicAssigned++;
+            }
         }
 
         return obstaclesParent.transform;

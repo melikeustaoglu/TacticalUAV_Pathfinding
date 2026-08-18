@@ -56,8 +56,18 @@ public class ReplanningController : MonoBehaviour
 
     private float lastReplanTime = -10f;
     private int replanCount = 0;
+    private int speedPacingCount = 0;
+    private int spatialReplanCount = 0;
+    private int peakSimultaneousThreats = 0;
     private Vector3 lastReplanPosition;
     private GameObject currentlyAvoidingObstacle = null;
+    private readonly HashSet<GameObject> currentlyAvoidingObstacles = new HashSet<GameObject>();
+
+    public GameObject CurrentlyAvoidingObstacle => currentlyAvoidingObstacle;
+    public IReadOnlyCollection<GameObject> CurrentlyAvoidingObstacles => currentlyAvoidingObstacles;
+    public int SpeedPacingCount => speedPacingCount;
+    public int SpatialReplanCount => spatialReplanCount;
+    public int PeakSimultaneousThreats => peakSimultaneousThreats;
 
     private void Awake()
     {
@@ -97,7 +107,7 @@ public class ReplanningController : MonoBehaviour
 
         if (State == NavigationState.Rerouting &&
             report.ThreateningObstacle.GameObject != null &&
-            report.ThreateningObstacle.GameObject == currentlyAvoidingObstacle)
+            currentlyAvoidingObstacles.Contains(report.ThreateningObstacle.GameObject))
         {
             return;
         }
@@ -114,7 +124,7 @@ public class ReplanningController : MonoBehaviour
 
             if (State == NavigationState.Rerouting &&
                 report.ThreateningObstacle.GameObject != null &&
-                report.ThreateningObstacle.GameObject == currentlyAvoidingObstacle)
+                currentlyAvoidingObstacles.Contains(report.ThreateningObstacle.GameObject))
             {
                 return;
             }
@@ -136,7 +146,8 @@ public class ReplanningController : MonoBehaviour
 
         if (State == NavigationState.Rerouting &&
             report.ThreateningObstacle.GameObject != null &&
-            report.ThreateningObstacle.GameObject == currentlyAvoidingObstacle)
+            currentlyAvoidingObstacles.Contains(report.ThreateningObstacle.GameObject) &&
+            (threatAssessment == null || threatAssessment.ActiveThreatReports == null || threatAssessment.ActiveThreatReports.Count <= 1))
         {
             return false;
         }
@@ -144,10 +155,58 @@ public class ReplanningController : MonoBehaviour
         if (Time.time - lastReplanTime < replanCooldown)
             return false;
 
-        // Strictly validate threat metrics before allowing dynamic replan
-        if (!float.IsFinite(report.DistanceToCollision) || !float.IsFinite(report.TimeToCollision) || report.ObstructedWaypointIndex < 0)
-            return false;
+        int currentActiveCount = threatAssessment != null && threatAssessment.ActiveThreatReports != null
+            ? threatAssessment.ActiveThreatReports.Count
+            : 0;
+        if (currentActiveCount > peakSimultaneousThreats)
+        {
+            peakSimultaneousThreats = currentActiveCount;
+        }
 
+        // Stage 1: Try Velocity Obstacle (VO) Tactical Speed Modulation for moving dynamic threats
+        if (report.ThreateningObstacle.IsDynamic && TryTacticalSpeedModulation(report, out float speedRatio))
+        {
+            float overrideDuration = float.IsFinite(report.TimeToCollision) ? report.TimeToCollision + 1.5f : 4.0f;
+            pathFollower.ApplyTacticalSpeedOverride(speedRatio, overrideDuration);
+            lastReplanPosition = transform.position;
+            lastReplanTime = Time.time;
+            replanCount++;
+            speedPacingCount++;
+            currentlyAvoidingObstacle = report.ThreateningObstacle.GameObject;
+            currentlyAvoidingObstacles.Clear();
+            if (currentlyAvoidingObstacle != null) currentlyAvoidingObstacles.Add(currentlyAvoidingObstacle);
+
+            if (threatAssessment != null && threatAssessment.ActiveThreatReports != null)
+            {
+                for (int i = 0; i < threatAssessment.ActiveThreatReports.Count; i++)
+                {
+                    if (threatAssessment.ActiveThreatReports[i].ThreateningObstacle.GameObject != null)
+                    {
+                        currentlyAvoidingObstacles.Add(threatAssessment.ActiveThreatReports[i].ThreateningObstacle.GameObject);
+                    }
+                }
+            }
+
+            SetState(NavigationState.Rerouting);
+
+            if (logReplanningEvents)
+            {
+                string obsName = report.ThreateningObstacle.GameObject != null
+                    ? report.ThreateningObstacle.GameObject.name
+                    : "Dynamic Obstacle";
+
+                Debug.Log(
+                    $"<color=#00FF99><b>[ReplanningController] VO TACTICAL SPEED PACING APPLIED (Replan #{replanCount} | Pacing #{speedPacingCount})</b></color>\n" +
+                    $"  • Obstacle: {obsName} (Dynamic)\n" +
+                    $"  • Speed Override: {speedRatio:P0} of cruise speed for {overrideDuration:F1}s\n" +
+                    $"  • TTC: {report.TimeToCollision:F2}s | Distance: {report.DistanceToCollision:F2}m\n" +
+                    $"  • Evasion: Pacing cleared VO collision cone without spatial path detour.");
+            }
+
+            return true;
+        }
+
+        // Stage 2: Fall back to Spatial A* Dynamic Replanning
         if (pathfinding == null || pathfinding.targetTransform == null)
         {
             pathfinding = FindFirstObjectByType<Pathfinding>();
@@ -162,10 +221,66 @@ public class ReplanningController : MonoBehaviour
         lastReplanPosition = currentPos;
         lastReplanTime = Time.time;
         replanCount++;
+        spatialReplanCount++;
         currentlyAvoidingObstacle = report.ThreateningObstacle.GameObject;
+        currentlyAvoidingObstacles.Clear();
+        if (currentlyAvoidingObstacle != null) currentlyAvoidingObstacles.Add(currentlyAvoidingObstacle);
 
-        // Execute A* search from the current physical UAV coordinates to the mission target
-        pathfinding.FindPath(currentPos, targetPos);
+        // Collect active dynamic hazards to avoid simultaneously (bounded to top 5)
+        List<DynamicHazard> compoundHazards = new List<DynamicHazard>(8);
+        float baseBuffer = threatAssessment != null ? threatAssessment.SafetyRadius + 1.2f : 2.2f;
+
+        if (threatAssessment != null && threatAssessment.ActiveThreatReports != null && threatAssessment.ActiveThreatReports.Count > 0)
+        {
+            for (int i = 0; i < threatAssessment.ActiveThreatReports.Count && compoundHazards.Count < 5; i++)
+            {
+                ThreatReport r = threatAssessment.ActiveThreatReports[i];
+                if (r.ThreateningObstacle.GameObject != null)
+                {
+                    currentlyAvoidingObstacles.Add(r.ThreateningObstacle.GameObject);
+                    float projHorizon = (r.ThreateningObstacle.IsDynamic && float.IsFinite(r.TimeToCollision) && r.TimeToCollision > 0f)
+                        ? Mathf.Min(3.0f, r.TimeToCollision + 0.5f)
+                        : 0f;
+
+                    compoundHazards.Add(new DynamicHazard(
+                        r.ThreateningObstacle.WorldPosition,
+                        baseBuffer,
+                        r.ThreateningObstacle.Velocity,
+                        r.ThreateningObstacle.IsDynamic,
+                        projHorizon));
+                }
+            }
+        }
+
+        // Ensure primary report obstacle is included if not already present
+        if (report.ThreateningObstacle.GameObject != null)
+        {
+            bool alreadyInList = false;
+            for (int i = 0; i < compoundHazards.Count; i++)
+            {
+                if (Vector3.Distance(compoundHazards[i].Position, report.ThreateningObstacle.WorldPosition) < 0.1f)
+                {
+                    alreadyInList = true;
+                    break;
+                }
+            }
+            if (!alreadyInList)
+            {
+                float primaryProjHorizon = (report.ThreateningObstacle.IsDynamic && float.IsFinite(report.TimeToCollision) && report.TimeToCollision > 0f)
+                    ? Mathf.Min(3.0f, report.TimeToCollision + 0.5f)
+                    : 0f;
+
+                compoundHazards.Insert(0, new DynamicHazard(
+                    report.ThreateningObstacle.WorldPosition,
+                    baseBuffer,
+                    report.ThreateningObstacle.Velocity,
+                    report.ThreateningObstacle.IsDynamic,
+                    primaryProjHorizon));
+            }
+        }
+
+        // Execute A* search avoiding all compound hazard footprints simultaneously
+        pathfinding.FindPath(currentPos, targetPos, compoundHazards);
 
         if (pathfinding.path != null && pathfinding.path.Count > 0)
         {
@@ -180,7 +295,7 @@ public class ReplanningController : MonoBehaviour
                     : "Obstacle";
 
                 Debug.Log(
-                    $"<color=#00FFFF><b>[ReplanningController] DYNAMIC REPLAN SUCCESS (Replan #{replanCount})</b></color>\n" +
+                    $"<color=#00FFFF><b>[ReplanningController] DYNAMIC REPLAN SUCCESS (Replan #{replanCount} | Spatial #{spatialReplanCount})</b></color>\n" +
                     $"  • Reason: {triggerReason}\n" +
                     $"  • Threat: {report.ThreatLevel} | Obstacle: {obsName}\n" +
                     $"  • TTC: {report.TimeToCollision:F2}s | Distance: {report.DistanceToCollision:F2}m | Waypoint: {report.ObstructedWaypointIndex}\n" +
@@ -217,6 +332,7 @@ public class ReplanningController : MonoBehaviour
             if (State != NavigationState.NoSafePath)
             {
                 currentlyAvoidingObstacle = null;
+                currentlyAvoidingObstacles.Clear();
                 SetState(NavigationState.Normal);
             }
             return;
@@ -224,12 +340,33 @@ public class ReplanningController : MonoBehaviour
 
         ThreatLevel currentThreat = threatAssessment != null ? threatAssessment.CurrentThreatLevel : ThreatLevel.None;
 
+        bool hasActiveThreats = false;
+        if (threatAssessment != null)
+        {
+            if (threatAssessment.ActiveThreatReports != null && threatAssessment.ActiveThreatReports.Count > 0)
+            {
+                for (int i = 0; i < threatAssessment.ActiveThreatReports.Count; i++)
+                {
+                    if (threatAssessment.ActiveThreatReports[i].ThreatLevel >= ThreatLevel.Warning)
+                    {
+                        hasActiveThreats = true;
+                        break;
+                    }
+                }
+            }
+            else if (currentThreat >= ThreatLevel.Warning)
+            {
+                hasActiveThreats = true;
+            }
+        }
+
         if (State == NavigationState.Rerouting)
         {
-            // Transition back to Normal cruising once clear of threat and cooldown expired
-            if (currentThreat <= ThreatLevel.Advisory && Time.time - lastReplanTime >= replanCooldown)
+            // Transition back to Normal cruising only once ALL active threats have cleared and cooldown expired
+            if (!hasActiveThreats && currentThreat <= ThreatLevel.Advisory && Time.time - lastReplanTime >= replanCooldown)
             {
                 currentlyAvoidingObstacle = null;
+                currentlyAvoidingObstacles.Clear();
                 SetState(NavigationState.Normal);
             }
         }
@@ -242,7 +379,7 @@ public class ReplanningController : MonoBehaviour
         }
         else if (State == NavigationState.ThreatDetected)
         {
-            if (currentThreat == ThreatLevel.None)
+            if (currentThreat == ThreatLevel.None && !hasActiveThreats)
             {
                 SetState(NavigationState.Normal);
             }
@@ -290,5 +427,126 @@ public class ReplanningController : MonoBehaviour
             case NavigationState.NoSafePath: return Color.red;
             default: return Color.white;
         }
+    }
+
+    /// <summary>
+    /// Checks whether tactical speed modulation can safely clear ALL active dynamic obstacles' Velocity Obstacle (VO) cones.
+    /// A candidate speed is accepted if and only if it is outside the VO cone of every relevant dynamic threat.
+    /// </summary>
+    public bool TryTacticalSpeedModulation(ThreatReport primaryReport, out float recommendedSpeedRatio)
+    {
+        recommendedSpeedRatio = 1.0f;
+
+        if (pathFollower == null || !pathFollower.IsFollowing)
+            return false;
+
+        Vector3 uavPos = transform.position;
+        float combinedRadius = threatAssessment != null ? threatAssessment.SafetyRadius + 0.5f : 1.5f;
+
+        // 1. Gather all active dynamic threats to evaluate (bounded to top 5)
+        List<ThreatReport> dynamicThreats = new List<ThreatReport>(8);
+
+        if (threatAssessment != null && threatAssessment.ActiveThreatReports != null && threatAssessment.ActiveThreatReports.Count > 0)
+        {
+            for (int i = 0; i < threatAssessment.ActiveThreatReports.Count && dynamicThreats.Count < 5; i++)
+            {
+                ThreatReport r = threatAssessment.ActiveThreatReports[i];
+                if (r.ThreateningObstacle.IsDynamic &&
+                    r.ThreateningObstacle.GameObject != null &&
+                    r.ThreateningObstacle.Velocity.sqrMagnitude >= 0.04f)
+                {
+                    dynamicThreats.Add(r);
+                }
+            }
+        }
+
+        // If primaryReport is dynamic and not already included, ensure it is present
+        if (primaryReport.ThreateningObstacle.IsDynamic &&
+            primaryReport.ThreateningObstacle.GameObject != null &&
+            primaryReport.ThreateningObstacle.Velocity.sqrMagnitude >= 0.04f)
+        {
+            bool alreadyInList = false;
+            for (int i = 0; i < dynamicThreats.Count; i++)
+            {
+                if (dynamicThreats[i].ThreateningObstacle.GameObject == primaryReport.ThreateningObstacle.GameObject)
+                {
+                    alreadyInList = true;
+                    break;
+                }
+            }
+            if (!alreadyInList)
+            {
+                dynamicThreats.Insert(0, primaryReport);
+            }
+        }
+
+        // If no dynamic moving threats exist, speed modulation cannot resolve static obstacles
+        if (dynamicThreats.Count == 0)
+            return false;
+
+        // 2. Build Velocity Obstacle (VO) cones for all active dynamic threats
+        List<VelocityObstacle> activeVOs = new List<VelocityObstacle>(dynamicThreats.Count);
+        List<float> lookaheads = new List<float>(dynamicThreats.Count);
+
+        for (int i = 0; i < dynamicThreats.Count; i++)
+        {
+            ThreatReport t = dynamicThreats[i];
+            VelocityObstacle vo = CollisionPrediction.CalculateVelocityObstacle(
+                uavPos,
+                t.ThreateningObstacle.WorldPosition,
+                t.ThreateningObstacle.Velocity,
+                combinedRadius);
+
+            if (vo.IsValid)
+            {
+                activeVOs.Add(vo);
+                float lookahead = float.IsFinite(t.TimeToCollision) && t.TimeToCollision > 0f
+                    ? Mathf.Min(8.0f, t.TimeToCollision + 2.0f)
+                    : 8.0f;
+                lookaheads.Add(lookahead);
+            }
+        }
+
+        if (activeVOs.Count == 0)
+            return false;
+
+        // 3. Determine candidate velocity along flight direction
+        Vector3 flightDir = (pathFollower.TargetWaypoint - uavPos).normalized;
+        flightDir.y = 0f;
+        if (flightDir.sqrMagnitude < 0.001f)
+            return false;
+
+        float cruiseSpeed = pathFollower.MoveSpeed;
+        float minAllowedSpeed = 0.5f;
+
+        // Test candidate reduced speed ratios: 50%, 65%, 75%
+        float[] candidateRatios = new float[] { 0.50f, 0.65f, 0.75f };
+
+        for (int rIdx = 0; rIdx < candidateRatios.Length; rIdx++)
+        {
+            float ratio = candidateRatios[rIdx];
+            float testSpeed = Mathf.Max(minAllowedSpeed, cruiseSpeed * ratio);
+            Vector3 testVel = flightDir * testSpeed;
+
+            // 4. Test candidate velocity against ALL active VO cones (Unanimous Safety Requirement)
+            bool isCandidateSafeAgainstAll = true;
+
+            for (int vIdx = 0; vIdx < activeVOs.Count; vIdx++)
+            {
+                if (activeVOs[vIdx].ContainsVelocity(testVel, lookaheads[vIdx]))
+                {
+                    isCandidateSafeAgainstAll = false;
+                    break; // Unsafe against this threat; reject candidate
+                }
+            }
+
+            if (isCandidateSafeAgainstAll)
+            {
+                recommendedSpeedRatio = ratio;
+                return true;
+            }
+        }
+
+        return false;
     }
 }

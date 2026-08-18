@@ -21,7 +21,8 @@ public static class BenchmarkSuiteRunner
         "Assets/Scenarios/DefaultScenario.asset",
         "Assets/Scenarios/Scenario_AlternativeSeed.asset",
         "Assets/Scenarios/Scenario_DenseObstacles.asset",
-        "Assets/Scenarios/Scenario_LongRange.asset"
+        "Assets/Scenarios/Scenario_LongRange.asset",
+        "Assets/Scenarios/Scenario_DynamicThreats.asset"
     };
 
     // SessionState Keys (Survive Play Mode domain reload)

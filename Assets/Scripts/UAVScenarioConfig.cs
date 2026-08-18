@@ -61,4 +61,22 @@ public class UAVScenarioConfig : ScriptableObject
     [Tooltip("Maximum additive cost penalty at obstacle boundary.")]
     [Range(0, 50)]
     public int maxClearancePenalty = 20;
+
+    [Header("Dynamic Moving Threats")]
+    [Tooltip("Enable dynamic moving obstacles in the operational theater.")]
+    public bool enableDynamicObstacles = false;
+
+    [Tooltip("Number of dynamic moving obstacles generated in the scenario.")]
+    [Range(0, 10)]
+    public int dynamicObstacleCount = 0;
+
+    [Tooltip("Movement speed of dynamic obstacles in meters per second.")]
+    [Range(0.2f, 5.0f)]
+    public float dynamicObstacleSpeed = 1.0f;
+
+    [Tooltip("Movement pattern for dynamic obstacles: Linear or Patrol.")]
+    public ObstacleMovementMode dynamicMovementMode = ObstacleMovementMode.Patrol;
+
+    [Tooltip("Patrol loop pattern: PingPong or Loop.")]
+    public PatrolLoopMode dynamicLoopMode = PatrolLoopMode.PingPong;
 }
