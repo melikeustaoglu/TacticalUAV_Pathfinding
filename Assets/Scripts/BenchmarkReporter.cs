@@ -209,6 +209,9 @@ public class BenchmarkReporter : MonoBehaviour
                     $"Events={report.timeline.Count}\n" +
                     $"File={filePath}");
             }
+
+            // Automatically compile and update the multi-scenario aggregate benchmark summary
+            GenerateAndExportAggregateSummary(exportDir);
         }
         catch (Exception ex)
         {
@@ -217,4 +220,243 @@ public class BenchmarkReporter : MonoBehaviour
 
         return report;
     }
+
+    /// <summary>
+    /// Scans all exported individual mission reports in the designated directory, compiles
+    /// a consolidated multi-scenario comparison matrix, and exports both benchmark_summary.json
+    /// and benchmark_summary.md.
+    /// </summary>
+    /// <param name="reportsDirectory">Target directory containing individual JSON reports. Defaults to MissionReports.</param>
+    /// <returns>Compiled AggregateBenchmarkReport instance.</returns>
+    public static AggregateBenchmarkReport GenerateAndExportAggregateSummary(string reportsDirectory = null)
+    {
+        if (string.IsNullOrEmpty(reportsDirectory))
+        {
+            reportsDirectory = Path.Combine(Application.persistentDataPath, "MissionReports");
+        }
+
+        AggregateBenchmarkReport aggReport = new AggregateBenchmarkReport();
+        aggReport.exportTimestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+        try
+        {
+            if (!Directory.Exists(reportsDirectory))
+            {
+                Directory.CreateDirectory(reportsDirectory);
+                return aggReport;
+            }
+
+            string[] reportFiles = Directory.GetFiles(reportsDirectory, "mission_report_*.json");
+            if (reportFiles == null || reportFiles.Length == 0)
+            {
+                return aggReport;
+            }
+
+            // Sort files by LastWriteTime descending to select the latest valid report per scenario
+            Array.Sort(reportFiles, (a, b) => File.GetLastWriteTime(b).CompareTo(File.GetLastWriteTime(a)));
+
+            Dictionary<string, ScenarioBenchmarkSummaryEntry> scenarioMap = new Dictionary<string, ScenarioBenchmarkSummaryEntry>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < reportFiles.Length; i++)
+            {
+                string filePath = reportFiles[i];
+                try
+                {
+                    string jsonContent = File.ReadAllText(filePath);
+                    if (string.IsNullOrEmpty(jsonContent))
+                        continue;
+
+                    MissionBenchmarkReport singleReport = JsonUtility.FromJson<MissionBenchmarkReport>(jsonContent);
+                    if (singleReport == null || string.IsNullOrEmpty(singleReport.scenarioName))
+                        continue;
+
+                    // Keep the latest report per distinct scenario name
+                    if (!scenarioMap.ContainsKey(singleReport.scenarioName))
+                    {
+                        ScenarioBenchmarkSummaryEntry entry = new ScenarioBenchmarkSummaryEntry
+                        {
+                            scenarioName = singleReport.scenarioName,
+                            success = singleReport.success,
+                            finalState = singleReport.finalState,
+                            obstacleCount = singleReport.obstacleCount,
+                            seed = singleReport.seed,
+                            cruiseSpeed = singleReport.cruiseSpeed,
+                            sensorRange = singleReport.sensorRange,
+                            overallScore = singleReport.overallScore,
+                            safetyScore = singleReport.safetyScore,
+                            navigationScore = singleReport.navigationScore,
+                            efficiencyScore = singleReport.efficiencyScore,
+                            threatManagementScore = singleReport.threatManagementScore,
+                            timeScore = singleReport.timeScore,
+                            flightTime = singleReport.flightTime,
+                            actualDistance = singleReport.actualDistance,
+                            plannedDistance = singleReport.plannedDistance,
+                            pathEfficiency = singleReport.pathEfficiency,
+                            replans = singleReport.replans,
+                            threatEncounters = singleReport.threatEncounters,
+                            criticalThreats = singleReport.criticalThreats,
+                            minimumClearance = singleReport.minimumClearance,
+                            eventCount = singleReport.timeline != null ? singleReport.timeline.Count : 0,
+                            sourceReportFile = Path.GetFileName(filePath)
+                        };
+
+                        scenarioMap[singleReport.scenarioName] = entry;
+                    }
+                }
+                catch (Exception readEx)
+                {
+                    // Non-fatal: skip corrupted or partially written single report
+                    Debug.LogWarning($"[BenchmarkReporter] Aggregate parse skipped file '{Path.GetFileName(filePath)}': {readEx.Message}");
+                }
+            }
+
+            foreach (var kvp in scenarioMap)
+            {
+                aggReport.scenarioSummaries.Add(kvp.Value);
+            }
+
+            // Calculate aggregate statistics
+            int count = aggReport.scenarioSummaries.Count;
+            aggReport.totalScenariosEvaluated = count;
+
+            if (count > 0)
+            {
+                float totalScore = 0f;
+                float totalTime = 0f;
+                float totalDist = 0f;
+                float totalEff = 0f;
+                int totalSucc = 0;
+                int totalRep = 0;
+                int totalThreats = 0;
+                int totalCrit = 0;
+
+                for (int i = 0; i < count; i++)
+                {
+                    var s = aggReport.scenarioSummaries[i];
+                    if (s.success) totalSucc++;
+                    totalScore += s.overallScore;
+                    totalTime += s.flightTime;
+                    totalDist += s.actualDistance;
+                    totalEff += s.pathEfficiency;
+                    totalRep += s.replans;
+                    totalThreats += s.threatEncounters;
+                    totalCrit += s.criticalThreats;
+                }
+
+                aggReport.successfulMissions = totalSucc;
+                aggReport.averageOverallScore = totalScore / count;
+                aggReport.averageFlightTime = totalTime / count;
+                aggReport.averageDistance = totalDist / count;
+                aggReport.averagePathEfficiency = totalEff / count;
+                aggReport.totalReplans = totalRep;
+                aggReport.totalThreatEncounters = totalThreats;
+                aggReport.totalCriticalThreats = totalCrit;
+            }
+
+            // 1. Export aggregate JSON
+            string aggregateJson = JsonUtility.ToJson(aggReport, true);
+            string aggregateJsonPath = Path.Combine(reportsDirectory, "benchmark_summary.json");
+            File.WriteAllText(aggregateJsonPath, aggregateJson);
+
+            // 2. Export human-readable Markdown summary table
+            string markdown = GenerateMarkdownSummary(aggReport);
+            string markdownPath = Path.Combine(reportsDirectory, "benchmark_summary.md");
+            File.WriteAllText(markdownPath, markdown);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[BenchmarkReporter] Aggregate summary export warning: {ex.Message}");
+        }
+
+        return aggReport;
+    }
+
+    private static string GenerateMarkdownSummary(AggregateBenchmarkReport report)
+    {
+        var sb = new System.Text.StringBuilder(2048);
+        sb.AppendLine("# Tactical UAV Pathfinding — Multi-Scenario Benchmark Summary");
+        sb.AppendLine($"**Generated**: {report.exportTimestamp} | **Evaluation Engine**: Unity 2022.3.62f3 LTS");
+        sb.AppendLine();
+        sb.AppendLine("### Executive Comparison Matrix");
+        sb.AppendLine();
+        sb.AppendLine("| Scenario | Status | State | Score | Time (s) | Distance (m) | Planned (m) | Efficiency | Replans | Clearance (m) | Threats | Crit | Safety | Nav | Eff | Threat | Time |");
+        sb.AppendLine("|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|");
+
+        for (int i = 0; i < report.scenarioSummaries.Count; i++)
+        {
+            var s = report.scenarioSummaries[i];
+            string status = s.success ? "**PASS**" : "**FAIL**";
+            string clearanceStr = float.IsPositiveInfinity(s.minimumClearance) || s.minimumClearance < 0f
+                ? "N/A"
+                : $"{s.minimumClearance:F2}m";
+
+            sb.AppendLine($"| `{s.scenarioName}` | {status} | {s.finalState} | {s.overallScore:F1} | {s.flightTime:F2}s | {s.actualDistance:F2}m | {s.plannedDistance:F2}m | {s.pathEfficiency * 100f:F1}% | {s.replans} | {clearanceStr} | {s.threatEncounters} | {s.criticalThreats} | {s.safetyScore:F1} | {s.navigationScore:F1} | {s.efficiencyScore:F1} | {s.threatManagementScore:F1} | {s.timeScore:F1} |");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("### Summary Metrics");
+        float successRate = report.totalScenariosEvaluated > 0 ? ((float)report.successfulMissions / report.totalScenariosEvaluated * 100f) : 0f;
+        sb.AppendLine($"- **Total Scenarios Evaluated**: {report.totalScenariosEvaluated}");
+        sb.AppendLine($"- **Mission Success Rate**: {report.successfulMissions} / {report.totalScenariosEvaluated} ({successRate:F1}%)");
+        sb.AppendLine($"- **Average Overall Score**: {report.averageOverallScore:F1} / 100.0");
+        sb.AppendLine($"- **Average Flight Duration**: {report.averageFlightTime:F2}s");
+        sb.AppendLine($"- **Average Distance Traveled**: {report.averageDistance:F2}m");
+        sb.AppendLine($"- **Average Path Efficiency**: {report.averagePathEfficiency * 100f:F1}%");
+        sb.AppendLine($"- **Total Dynamic Replans**: {report.totalReplans}");
+        sb.AppendLine($"- **Total Threat Encounters**: {report.totalThreatEncounters} ({report.totalCriticalThreats} Critical)");
+        sb.AppendLine();
+
+        return sb.ToString();
+    }
+}
+
+/// <summary>
+/// Serializable summary entry for a single scenario within the aggregate benchmark.
+/// </summary>
+[Serializable]
+public class ScenarioBenchmarkSummaryEntry
+{
+    public string scenarioName;
+    public bool success;
+    public string finalState;
+    public int obstacleCount;
+    public int seed;
+    public float cruiseSpeed;
+    public float sensorRange;
+    public float overallScore;
+    public float safetyScore;
+    public float navigationScore;
+    public float efficiencyScore;
+    public float threatManagementScore;
+    public float timeScore;
+    public float flightTime;
+    public float actualDistance;
+    public float plannedDistance;
+    public float pathEfficiency;
+    public int replans;
+    public int threatEncounters;
+    public int criticalThreats;
+    public float minimumClearance;
+    public int eventCount;
+    public string sourceReportFile;
+}
+
+/// <summary>
+/// Serializable container for the multi-scenario aggregate benchmark report.
+/// Compatible with UnityEngine.JsonUtility.
+/// </summary>
+[Serializable]
+public class AggregateBenchmarkReport
+{
+    public string exportTimestamp;
+    public int totalScenariosEvaluated;
+    public int successfulMissions;
+    public float averageOverallScore;
+    public float averageFlightTime;
+    public float averageDistance;
+    public float averagePathEfficiency;
+    public int totalReplans;
+    public int totalThreatEncounters;
+    public int totalCriticalThreats;
+    public List<ScenarioBenchmarkSummaryEntry> scenarioSummaries = new List<ScenarioBenchmarkSummaryEntry>();
 }

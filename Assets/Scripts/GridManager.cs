@@ -8,11 +8,18 @@ public class GridManager : MonoBehaviour
     public float nodeRadius = 0.5f;
     public LayerMask obstacleMask;
 
+    [Header("Airspace Clearance Potential Field")]
+    public bool enableClearancePotentialField = true;
+    public float clearanceSafetyThreshold = 3.0f; // in meters
+    public int maxClearancePenalty = 20;          // max integer additive penalty
+
     [HideInInspector]
     public Node[,] grid;
 
     private float nodeDiameter;
     private int gridSizeX, gridSizeY;
+
+    public int MaxSize => Mathf.Max(1, gridSizeX * gridSizeY);
 
     void Start()
     {
@@ -51,7 +58,99 @@ public class GridManager : MonoBehaviour
             }
         }
 
-        
+        if (enableClearancePotentialField)
+        {
+            CalculateClearancePotentialField(clearanceSafetyThreshold, maxClearancePenalty);
+        }
+    }
+
+    /// <summary>
+    /// Computes the Distance Transform from all unwalkable obstacle cells across the grid
+    /// and assigns an airspace clearance penalty to each walkable node using a smooth quadratic falloff.
+    /// </summary>
+    public void CalculateClearancePotentialField(float safetyThreshold = 3.0f, int maxPenalty = 20)
+    {
+        if (grid == null || gridSizeX == 0 || gridSizeY == 0)
+            return;
+
+        int[,] gridDist = new int[gridSizeX, gridSizeY];
+        Queue<Vector2Int> queue = new Queue<Vector2Int>(gridSizeX * gridSizeY);
+
+        for (int x = 0; x < gridSizeX; x++)
+        {
+            for (int y = 0; y < gridSizeY; y++)
+            {
+                if (!grid[x, y].isWalkable)
+                {
+                    gridDist[x, y] = 0;
+                    queue.Enqueue(new Vector2Int(x, y));
+                }
+                else
+                {
+                    gridDist[x, y] = int.MaxValue;
+                }
+            }
+        }
+
+        // Multi-Source 8-Directional Distance Transform
+        while (queue.Count > 0)
+        {
+            Vector2Int cur = queue.Dequeue();
+            int curDist = gridDist[cur.x, cur.y];
+
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    if (dx == 0 && dy == 0)
+                        continue;
+
+                    int nx = cur.x + dx;
+                    int ny = cur.y + dy;
+
+                    if (nx >= 0 && nx < gridSizeX && ny >= 0 && ny < gridSizeY)
+                    {
+                        int stepCost = (dx == 0 || dy == 0) ? 10 : 14; // Octile metric scale
+                        if (curDist + stepCost < gridDist[nx, ny])
+                        {
+                            gridDist[nx, ny] = curDist + stepCost;
+                            queue.Enqueue(new Vector2Int(nx, ny));
+                        }
+                    }
+                }
+            }
+        }
+
+        float threshold = Mathf.Max(0.1f, safetyThreshold);
+
+        for (int x = 0; x < gridSizeX; x++)
+        {
+            for (int y = 0; y < gridSizeY; y++)
+            {
+                Node node = grid[x, y];
+                if (!node.isWalkable)
+                {
+                    node.clearanceDistance = 0f;
+                    node.clearancePenalty = maxPenalty;
+                    continue;
+                }
+
+                // Convert octile metric distance into physical world meters
+                float distMeters = (gridDist[x, y] / 10f) * nodeDiameter;
+                node.clearanceDistance = distMeters;
+
+                if (distMeters >= threshold)
+                {
+                    node.clearancePenalty = 0;
+                }
+                else
+                {
+                    // Smooth quadratic falloff: penalty = maxPenalty * (1 - d/threshold)^2
+                    float norm = 1.0f - (distMeters / threshold);
+                    node.clearancePenalty = Mathf.RoundToInt(maxPenalty * (norm * norm));
+                }
+            }
+        }
     }
 
     public List<Node> GetNeighbors(Node node)

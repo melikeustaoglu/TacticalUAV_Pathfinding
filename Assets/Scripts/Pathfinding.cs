@@ -146,7 +146,7 @@ public class Pathfinding : MonoBehaviour
         Node startNode = gridManager.NodeFromWorldPoint(startPos);
         Node targetNode = gridManager.NodeFromWorldPoint(targetPos);
 
-        List<Node> openSet = new List<Node>();
+        Heap<Node> openSet = new Heap<Node>(gridManager.MaxSize);
         HashSet<Node> closedSet = new HashSet<Node>();
 
         openSet.Add(startNode);
@@ -159,6 +159,7 @@ public class Pathfinding : MonoBehaviour
                 node.gCost = int.MaxValue;
                 node.hCost = 0;
                 node.parent = null;
+                node.HeapIndex = -1;
             }
         }
 
@@ -167,17 +168,7 @@ public class Pathfinding : MonoBehaviour
 
         while (openSet.Count > 0)
         {
-            Node currentNode = openSet[0];
-            for (int i = 1; i < openSet.Count; i++)
-            {
-                if (openSet[i].fCost < currentNode.fCost ||
-                    openSet[i].fCost == currentNode.fCost && openSet[i].hCost < currentNode.hCost)
-                {
-                    currentNode = openSet[i];
-                }
-            }
-
-            openSet.Remove(currentNode);
+            Node currentNode = openSet.RemoveFirst();
             closedSet.Add(currentNode);
 
             if (currentNode == targetNode)
@@ -191,7 +182,7 @@ public class Pathfinding : MonoBehaviour
                 if (!neighbor.isWalkable || closedSet.Contains(neighbor))
                     continue;
 
-                int newCostToNeighbor = currentNode.gCost + GetDistance(currentNode, neighbor);
+                int newCostToNeighbor = currentNode.gCost + GetDistance(currentNode, neighbor) + neighbor.clearancePenalty;
                 if (newCostToNeighbor < neighbor.gCost || !openSet.Contains(neighbor))
                 {
                     neighbor.gCost = newCostToNeighbor;
@@ -201,6 +192,10 @@ public class Pathfinding : MonoBehaviour
                     if (!openSet.Contains(neighbor))
                     {
                         openSet.Add(neighbor);
+                    }
+                    else
+                    {
+                        openSet.UpdateItem(neighbor);
                     }
                 }
             }

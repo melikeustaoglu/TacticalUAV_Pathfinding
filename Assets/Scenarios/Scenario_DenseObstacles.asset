@@ -15,6 +15,9 @@ MonoBehaviour:
   startPosition: {x: -10, y: 1, z: -10}
   targetPosition: {x: 10, y: 1, z: 10}
   obstacleCount: 18
-  seed: 42
+  seed: 300
+  distributionMode: 1
+  corridorFocusWeight: 0.8
+  corridorWidth: 10
   uavMoveSpeed: 1.5
   sensorDetectionRange: 10

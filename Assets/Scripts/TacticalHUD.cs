@@ -5,8 +5,9 @@ using UnityEngine.UI;
 
 /// <summary>
 /// Lightweight Tactical Telemetry HUD overlay using Unity uGUI.
-/// Observes MissionManager and MissionScore to render real-time UAV mission state,
-/// flight telemetry, threat counters, clearance metrics, and evaluation scores.
+/// Observes MissionManager, PathFollower, ThreatAssessment, and MissionScore to render real-time
+/// UAV mission progress, spatial coordinates, flight speed, threat counters, clearance metrics,
+/// and 5-axis evaluation scores with zero per-frame garbage collection allocations.
 /// </summary>
 public class TacticalHUD : MonoBehaviour
 {
@@ -18,6 +19,7 @@ public class TacticalHUD : MonoBehaviour
     private PathFollower pathFollower;
     private ThreatAssessment threatAssessment;
     private ReplanningController replanningController;
+    private Pathfinding pathfinding;
 
     // uGUI Hierarchy Elements
     private Canvas hudCanvas;
@@ -26,6 +28,8 @@ public class TacticalHUD : MonoBehaviour
     private Image headerBar;
     private Text headerText;
     private Text stateBadgeText;
+    private RectTransform progressBarFillRect;
+    private Text progressBarText;
     private Text telemetryText;
     private Text scoreText;
 
@@ -48,24 +52,33 @@ public class TacticalHUD : MonoBehaviour
 
     private void Awake()
     {
-        missionManager = GetComponent<MissionManager>() ?? FindFirstObjectByType<MissionManager>();
-        pathFollower = GetComponent<PathFollower>() ?? FindFirstObjectByType<PathFollower>();
-        threatAssessment = GetComponent<ThreatAssessment>() ?? FindFirstObjectByType<ThreatAssessment>();
-        replanningController = GetComponent<ReplanningController>() ?? FindFirstObjectByType<ReplanningController>();
+        AcquireSubsystems();
     }
 
     private void Start()
     {
+        AcquireSubsystems();
         CreateUGUIHierarchy();
         RefreshDisplay(true);
     }
 
-    private void OnEnable()
+    private void AcquireSubsystems()
     {
         if (missionManager == null)
-        {
             missionManager = GetComponent<MissionManager>() ?? FindFirstObjectByType<MissionManager>();
-        }
+        if (pathFollower == null)
+            pathFollower = GetComponent<PathFollower>() ?? FindFirstObjectByType<PathFollower>();
+        if (threatAssessment == null)
+            threatAssessment = GetComponent<ThreatAssessment>() ?? FindFirstObjectByType<ThreatAssessment>();
+        if (replanningController == null)
+            replanningController = GetComponent<ReplanningController>() ?? FindFirstObjectByType<ReplanningController>();
+        if (pathfinding == null)
+            pathfinding = FindFirstObjectByType<Pathfinding>();
+    }
+
+    private void OnEnable()
+    {
+        AcquireSubsystems();
 
         if (missionManager != null)
         {
@@ -114,7 +127,7 @@ public class TacticalHUD : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds the tactical uGUI Canvas and formatted Text hierarchy programmatically.
+    /// Builds the tactical uGUI Canvas, visual progress bar, and formatted Text hierarchy.
     /// </summary>
     private void CreateUGUIHierarchy()
     {
@@ -142,11 +155,11 @@ public class TacticalHUD : MonoBehaviour
         panelRect.anchorMin = new Vector2(0f, 1f);
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
-        panelRect.anchoredPosition = new Vector2(24f, -24f);
-        panelRect.sizeDelta = new Vector2(400f, 540f);
+        panelRect.anchoredPosition = new Vector2(28f, -28f);
+        panelRect.sizeDelta = new Vector2(460f, 660f);
 
         backgroundPanel = hudPanelObject.AddComponent<Image>();
-        backgroundPanel.color = new Color(0.06f, 0.09f, 0.14f, 0.88f); // Tactical Dark Slate
+        backgroundPanel.color = new Color(0.05f, 0.08f, 0.12f, 0.94f); // Deep Tactical Dark Slate
 
         Font defaultFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf") ??
                            Resources.GetBuiltinResource<Font>("Arial.ttf");
@@ -159,10 +172,10 @@ public class TacticalHUD : MonoBehaviour
         headerRect.anchorMax = new Vector2(1f, 1f);
         headerRect.pivot = new Vector2(0.5f, 1f);
         headerRect.anchoredPosition = new Vector2(0f, 0f);
-        headerRect.sizeDelta = new Vector2(0f, 40f);
+        headerRect.sizeDelta = new Vector2(0f, 42f);
 
         headerBar = headerObj.AddComponent<Image>();
-        headerBar.color = new Color(0.12f, 0.22f, 0.35f, 0.95f);
+        headerBar.color = new Color(0.09f, 0.18f, 0.29f, 0.98f);
 
         // Header Title Text
         GameObject headerTextObj = new GameObject("Header_Text");
@@ -175,47 +188,102 @@ public class TacticalHUD : MonoBehaviour
 
         headerText = headerTextObj.AddComponent<Text>();
         headerText.font = defaultFont;
-        headerText.fontSize = 16;
+        headerText.fontSize = 15;
         headerText.fontStyle = FontStyle.Bold;
-        headerText.color = new Color(0.35f, 0.85f, 1f); // Neon Cyan
+        headerText.color = new Color(0.35f, 0.88f, 1f); // Neon Cyan
         headerText.alignment = TextAnchor.MiddleLeft;
         headerText.text = "TACTICAL UAV MISSION TELEMETRY";
 
-        // 4. Mission State Badge Banner
-        GameObject badgeObj = new GameObject("State_Badge");
+        // 4. Mission State Badge Banner Container
+        GameObject badgeObj = new GameObject("State_Badge_Container");
         badgeObj.transform.SetParent(hudPanelObject.transform, false);
         RectTransform badgeRect = badgeObj.AddComponent<RectTransform>();
         badgeRect.anchorMin = new Vector2(0f, 1f);
         badgeRect.anchorMax = new Vector2(1f, 1f);
         badgeRect.pivot = new Vector2(0.5f, 1f);
-        badgeRect.anchoredPosition = new Vector2(0f, -44f);
-        badgeRect.sizeDelta = new Vector2(-24f, 36f);
+        badgeRect.anchoredPosition = new Vector2(0f, -48f);
+        badgeRect.sizeDelta = new Vector2(-28f, 32f);
 
-        stateBadgeText = badgeObj.AddComponent<Text>();
+        Image badgeBg = badgeObj.AddComponent<Image>();
+        badgeBg.color = new Color(0.08f, 0.13f, 0.20f, 0.90f);
+
+        // State Badge Text
+        GameObject badgeTextObj = new GameObject("State_Badge_Text");
+        badgeTextObj.transform.SetParent(badgeObj.transform, false);
+        RectTransform badgeTextRect = badgeTextObj.AddComponent<RectTransform>();
+        badgeTextRect.anchorMin = Vector2.zero;
+        badgeTextRect.anchorMax = Vector2.one;
+        badgeTextRect.offsetMin = new Vector2(8f, 0f);
+        badgeTextRect.offsetMax = new Vector2(-8f, 0f);
+
+        stateBadgeText = badgeTextObj.AddComponent<Text>();
         stateBadgeText.font = defaultFont;
-        stateBadgeText.fontSize = 15;
+        stateBadgeText.fontSize = 13;
         stateBadgeText.fontStyle = FontStyle.Bold;
         stateBadgeText.alignment = TextAnchor.MiddleCenter;
         stateBadgeText.color = Color.white;
 
-        // 5. Telemetry Main Content Text
+        // 5. Visual Mission Progress Bar Container
+        GameObject progressContainer = new GameObject("Progress_Container");
+        progressContainer.transform.SetParent(hudPanelObject.transform, false);
+        RectTransform progContRect = progressContainer.AddComponent<RectTransform>();
+        progContRect.anchorMin = new Vector2(0f, 1f);
+        progContRect.anchorMax = new Vector2(1f, 1f);
+        progContRect.pivot = new Vector2(0.5f, 1f);
+        progContRect.anchoredPosition = new Vector2(0f, -86f);
+        progContRect.sizeDelta = new Vector2(-28f, 24f);
+
+        Image progBg = progressContainer.AddComponent<Image>();
+        progBg.color = new Color(0.08f, 0.13f, 0.20f, 0.95f);
+
+        // Progress Bar Fill
+        GameObject fillObj = new GameObject("Progress_Fill");
+        fillObj.transform.SetParent(progressContainer.transform, false);
+        progressBarFillRect = fillObj.AddComponent<RectTransform>();
+        progressBarFillRect.anchorMin = new Vector2(0f, 0f);
+        progressBarFillRect.anchorMax = new Vector2(0f, 1f);
+        progressBarFillRect.pivot = new Vector2(0f, 0.5f);
+        progressBarFillRect.anchoredPosition = Vector2.zero;
+        progressBarFillRect.sizeDelta = Vector2.zero;
+
+        Image fillImg = fillObj.AddComponent<Image>();
+        fillImg.color = new Color(0.0f, 0.78f, 1.0f, 0.92f); // Bright Neon Cyan Fill
+
+        // Progress Bar Text
+        GameObject progTextObj = new GameObject("Progress_Text");
+        progTextObj.transform.SetParent(progressContainer.transform, false);
+        RectTransform progTextRect = progTextObj.AddComponent<RectTransform>();
+        progTextRect.anchorMin = Vector2.zero;
+        progTextRect.anchorMax = Vector2.one;
+        progTextRect.offsetMin = Vector2.zero;
+        progTextRect.offsetMax = Vector2.zero;
+
+        progressBarText = progTextObj.AddComponent<Text>();
+        progressBarText.font = defaultFont;
+        progressBarText.fontSize = 12;
+        progressBarText.fontStyle = FontStyle.Bold;
+        progressBarText.alignment = TextAnchor.MiddleCenter;
+        progressBarText.color = Color.white;
+
+        // 6. Telemetry Main Content Text
         GameObject telemetryObj = new GameObject("Telemetry_Content");
         telemetryObj.transform.SetParent(hudPanelObject.transform, false);
         RectTransform telemetryRect = telemetryObj.AddComponent<RectTransform>();
         telemetryRect.anchorMin = new Vector2(0f, 1f);
         telemetryRect.anchorMax = new Vector2(1f, 1f);
         telemetryRect.pivot = new Vector2(0.5f, 1f);
-        telemetryRect.anchoredPosition = new Vector2(0f, -86f);
-        telemetryRect.sizeDelta = new Vector2(-32f, 260f);
+        telemetryRect.anchoredPosition = new Vector2(0f, -118f);
+        telemetryRect.sizeDelta = new Vector2(-32f, 350f);
 
         telemetryText = telemetryObj.AddComponent<Text>();
         telemetryText.font = defaultFont;
         telemetryText.fontSize = 13;
-        telemetryText.lineSpacing = 1.25f;
-        telemetryText.color = new Color(0.9f, 0.93f, 0.96f);
+        telemetryText.lineSpacing = 1.28f;
+        telemetryText.color = new Color(0.92f, 0.95f, 0.98f);
         telemetryText.alignment = TextAnchor.UpperLeft;
+        telemetryText.supportRichText = true;
 
-        // 6. Mission Score Evaluation Footer Box
+        // 7. Mission Score Evaluation Footer Box
         GameObject scoreObj = new GameObject("Score_Content");
         scoreObj.transform.SetParent(hudPanelObject.transform, false);
         RectTransform scoreRect = scoreObj.AddComponent<RectTransform>();
@@ -228,46 +296,92 @@ public class TacticalHUD : MonoBehaviour
         scoreText = scoreObj.AddComponent<Text>();
         scoreText.font = defaultFont;
         scoreText.fontSize = 13;
-        scoreText.lineSpacing = 1.2f;
-        scoreText.color = new Color(1f, 0.85f, 0.35f); // Amber / Gold
+        scoreText.lineSpacing = 1.25f;
+        scoreText.color = new Color(1f, 0.88f, 0.40f); // Amber / Gold
         scoreText.alignment = TextAnchor.UpperLeft;
+        scoreText.supportRichText = true;
     }
 
     /// <summary>
-    /// Refreshes the telemetry text labels and state badges.
+    /// Refreshes the telemetry text labels, progress bar, threat status, and state badges.
     /// </summary>
     public void RefreshDisplay(bool forceImmediate)
     {
+        AcquireSubsystems();
+
         if (missionManager == null)
-        {
-            missionManager = GetComponent<MissionManager>() ?? FindFirstObjectByType<MissionManager>();
-            if (missionManager == null)
-                return;
-        }
+            return;
 
         MissionState state = missionManager.State;
         UpdateStateBadge(state);
 
-        // Build Telemetry Block
-        telemetrySb.Clear();
-        telemetrySb.AppendLine("── FLIGHT TELEMETRY ───────────────");
-        telemetrySb.AppendLine($"Flight Time:        {missionManager.TotalFlightTime:F2} s");
-        telemetrySb.AppendLine($"Actual Distance:    {missionManager.TotalDistanceTraveled:F2} m");
-        telemetrySb.AppendLine($"Planned Distance:   {missionManager.PlannedPathDistance:F2} m");
+        // Compute Spatial & Progress Telemetry
+        Vector3 uavPos = pathFollower != null ? pathFollower.transform.position : transform.position;
+        Vector3 startPos = pathfinding != null && pathfinding.startMarkerTransform != null
+            ? pathfinding.startMarkerTransform.position
+            : GameManagerBootstrapper.DefaultStartPosition;
+        Vector3 targetPos = pathfinding != null && pathfinding.targetTransform != null
+            ? pathfinding.targetTransform.position
+            : GameManagerBootstrapper.DefaultTargetPosition;
+
+        float progressPct = CalculateMissionProgress(uavPos, startPos, targetPos, state);
+
+        // Update Visual Progress Bar
+        if (progressBarFillRect != null)
+        {
+            progressBarFillRect.anchorMax = new Vector2(Mathf.Clamp01(progressPct / 100f), 1f);
+        }
+        if (progressBarText != null)
+        {
+            progressBarText.text = $"MISSION PROGRESS:  {progressPct:F1}%";
+        }
+
+        // Live Threat Status
+        ThreatLevel threatLevel = threatAssessment != null ? threatAssessment.CurrentThreatLevel : ThreatLevel.None;
+        string threatBadgeStr;
+        switch (threatLevel)
+        {
+            case ThreatLevel.Critical:
+                threatBadgeStr = "<color=#FF4444><b>[ CRITICAL DETOUR ]</b></color>";
+                break;
+            case ThreatLevel.Warning:
+                threatBadgeStr = "<color=#FFAA22><b>[ WARNING HAZARD ]</b></color>";
+                break;
+            case ThreatLevel.Advisory:
+                threatBadgeStr = "<color=#FFFF44><b>[ ADVISORY ]</b></color>";
+                break;
+            default:
+                threatBadgeStr = "<color=#33FF88><b>[ CLEAR AIRSPACE ]</b></color>";
+                break;
+        }
+
+        float currentSpeed = pathFollower != null
+            ? (pathFollower.IsFollowing ? pathFollower.CurrentFlightSpeed : 0f)
+            : 0f;
 
         float efficiencyPct = missionManager.PathEfficiency * 100f;
-        telemetrySb.AppendLine($"Path Efficiency:    {efficiencyPct:F1} %");
+        string effColor = efficiencyPct >= 85f ? "#33FF88" : (efficiencyPct >= 70f ? "#FFCC33" : "#FF6644");
+
+        // Build Telemetry Block with High-Contrast Typography
+        telemetrySb.Clear();
+        telemetrySb.AppendLine("<color=#5EC8FF><b>── MISSION & NAVIGATION ─────────────────</b></color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Position:</color></b>      <color=#FFFFFF>X: <b>{uavPos.x,6:F2}</b> m,  Z: <b>{uavPos.z,6:F2}</b> m</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Target:</color></b>        <color=#FFFFFF>X: <b>{targetPos.x,6:F2}</b> m,  Z: <b>{targetPos.z,6:F2}</b> m</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Speed:</color></b>  <color=#00FFAA><b>{currentSpeed:F2}</b> m/s</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Time:</color></b>   <color=#FFFFFF><b>{missionManager.TotalFlightTime:F2}</b> s</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Distance:</color></b>      <color=#FFFFFF><b>{missionManager.TotalDistanceTraveled:F2}</b> m</color>  <color=#88A2BF>(Plan: {missionManager.PlannedPathDistance:F2} m)</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Path Efficiency:</color></b><color={effColor}> <b>{efficiencyPct:F1} %</b></color>");
 
         telemetrySb.AppendLine();
-        telemetrySb.AppendLine("── TACTICAL & THREAT ENCOUNTERS ───");
-        telemetrySb.AppendLine($"Dynamic Replans:    {missionManager.TotalReplans}");
-        telemetrySb.AppendLine($"Threat Encounters:  {missionManager.TotalThreatEncounters}");
-        telemetrySb.AppendLine($"Critical Threats:   {missionManager.CriticalThreatCount}");
+        telemetrySb.AppendLine("<color=#5EC8FF><b>── TACTICAL & THREAT ENCOUNTERS ─────────</b></color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Status:</color></b>   {threatBadgeStr}");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{missionManager.TotalReplans}</b></color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Events:</color></b>   <color=#FFFFFF><b>{missionManager.TotalThreatEncounters}</b></color>  <color=#88A2BF>({missionManager.CriticalThreatCount} Critical)</color>");
 
         string clearanceStr = float.IsPositiveInfinity(missionManager.MinimumClearanceObserved)
-            ? "N/A (Clear)"
-            : $"{missionManager.MinimumClearanceObserved:F2} m";
-        telemetrySb.AppendLine($"Min Clearance:      {clearanceStr}");
+            ? "<color=#33FF88><b>N/A (Clear)</b></color>"
+            : $"<color=#FFFFFF><b>{missionManager.MinimumClearanceObserved:F2}</b> m</color>";
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Min Clearance:</color></b>   {clearanceStr}");
 
         if (telemetryText != null)
         {
@@ -291,18 +405,35 @@ public class TacticalHUD : MonoBehaviour
         MissionScore score = missionManager.Score ?? MissionScore.Evaluate(currentSnapshot, nominalSpeed);
 
         scoreSb.Clear();
-        scoreSb.AppendLine("── MISSION SCORE EVALUATION ───────");
-        scoreSb.AppendLine($"OVERALL SCORE:      <b>{score.OverallScore:F1} / 100</b>");
-        scoreSb.AppendLine($" • Safety:          {score.SafetyScore:F1}");
-        scoreSb.AppendLine($" • Navigation:      {score.NavigationScore:F1}");
-        scoreSb.AppendLine($" • Efficiency:      {score.EfficiencyScore:F1}");
-        scoreSb.AppendLine($" • Threat Mgmt:     {score.ThreatManagementScore:F1}");
-        scoreSb.AppendLine($" • Flight Time:     {score.TimeScore:F1}");
+        scoreSb.AppendLine("<color=#FFD54F><b>── PERFORMANCE SCORE EVALUATION ─────────</b></color>");
+        scoreSb.AppendLine($"<b><color=#FFFFFF>OVERALL SCORE:</color></b>      <size=15><color=#FFD54F><b>{score.OverallScore:F1} / 100.0</b></color></size>");
+        scoreSb.AppendLine($" • <color=#88A2BF>Safety:</color>     <color=#FFFFFF><b>{score.SafetyScore,5:F1}</b></color>      • <color=#88A2BF>Threat Mgmt:</color> <color=#FFFFFF><b>{score.ThreatManagementScore,5:F1}</b></color>");
+        scoreSb.AppendLine($" • <color=#88A2BF>Navigation:</color> <color=#FFFFFF><b>{score.NavigationScore,5:F1}</b></color>      • <color=#88A2BF>Flight Time:</color> <color=#FFFFFF><b>{score.TimeScore,5:F1}</b></color>");
+        scoreSb.AppendLine($" • <color=#88A2BF>Efficiency:</color> <color=#FFFFFF><b>{score.EfficiencyScore,5:F1}</b></color>");
 
         if (scoreText != null)
         {
             scoreText.text = scoreSb.ToString();
         }
+    }
+
+    private float CalculateMissionProgress(Vector3 uavPos, Vector3 startPos, Vector3 targetPos, MissionState state)
+    {
+        if (state == MissionState.Completed)
+            return 100f;
+
+        if (state == MissionState.Pending)
+            return 0f;
+
+        float totalSpan = Vector3.Distance(new Vector3(startPos.x, 0f, startPos.z), new Vector3(targetPos.x, 0f, targetPos.z));
+        if (totalSpan <= 0.001f)
+            return 100f;
+
+        float remainingDist = Vector3.Distance(new Vector3(uavPos.x, 0f, uavPos.z), new Vector3(targetPos.x, 0f, targetPos.z));
+        float progress = Mathf.Clamp01(1.0f - (remainingDist / totalSpan)) * 100f;
+
+        // Never display 100% while still in-flight
+        return Mathf.Min(progress, 99.9f);
     }
 
     private void UpdateStateBadge(MissionState state)

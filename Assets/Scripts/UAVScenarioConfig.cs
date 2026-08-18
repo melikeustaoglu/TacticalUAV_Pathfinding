@@ -1,5 +1,12 @@
 using UnityEngine;
 
+public enum ObstacleDistributionMode
+{
+    Uniform = 0,
+    CorridorFocused = 1,
+    Mixed = 2
+}
+
 /// <summary>
 /// Lightweight, optional ScriptableObject profile providing centralized configuration
 /// for tactical mission endpoints, scenario obstacles, seed, and UAV operational limits.
@@ -22,6 +29,18 @@ public class UAVScenarioConfig : ScriptableObject
     [Tooltip("Deterministic pseudo-random seed for obstacle placement.")]
     public int seed = 42;
 
+    [Header("Obstacle Placement Strategy")]
+    [Tooltip("Strategy used to distribute procedural obstacles across the operational theater.")]
+    public ObstacleDistributionMode distributionMode = ObstacleDistributionMode.Uniform;
+
+    [Tooltip("Probability [0, 1] of an obstacle spawning focused within the tactical flight corridor rather than uniform scatter.")]
+    [Range(0f, 1f)]
+    public float corridorFocusWeight = 0.0f;
+
+    [Tooltip("Width of the tactical flight corridor in meters.")]
+    [Range(2f, 30f)]
+    public float corridorWidth = 10.0f;
+
     [Header("UAV Flight & Perception Parameters")]
     [Tooltip("Nominal UAV cruise flight speed in meters per second.")]
     [Range(0.5f, 10.0f)]
@@ -30,4 +49,16 @@ public class UAVScenarioConfig : ScriptableObject
     [Tooltip("Forward-looking perception sensor detection range in meters.")]
     [Range(1.0f, 30.0f)]
     public float sensorDetectionRange = 10.0f;
+
+    [Header("Airspace Clearance Potential Field")]
+    [Tooltip("Enable safety-weighted A* pathfinding incorporating obstacle clearance gradient.")]
+    public bool enableClearancePenalty = true;
+
+    [Tooltip("Distance threshold in meters below which obstacle proximity penalty applies.")]
+    [Range(0.5f, 10.0f)]
+    public float clearanceSafetyThreshold = 3.0f;
+
+    [Tooltip("Maximum additive cost penalty at obstacle boundary.")]
+    [Range(0, 50)]
+    public int maxClearancePenalty = 20;
 }

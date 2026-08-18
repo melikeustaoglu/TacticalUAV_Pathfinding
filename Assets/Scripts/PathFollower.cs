@@ -2,12 +2,34 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Kinematic UAV waypoint follower with bounded yaw turn rate, smooth linear acceleration/deceleration,
+/// adaptive cornering velocity scaling, and zero per-frame garbage collection allocations.
+/// </summary>
 public class PathFollower : MonoBehaviour
 {
-    [Header("Movement Settings")]
+    [Header("Movement & Speed Settings")]
+    [Tooltip("Nominal cruise flight speed in meters per second.")]
     [SerializeField] private float moveSpeed = 1.5f;
-    [SerializeField] private float rotationSpeed = 8.0f;
+
+    [Tooltip("Waypoint proximity threshold to consider reached.")]
     [SerializeField] private float nodeReachThreshold = 0.1f;
+
+    [Header("Kinematic Dynamics & Heading Constraints")]
+    [Tooltip("Maximum yaw turn rate in degrees per second.")]
+    [SerializeField] private float maxYawRate = 120.0f; // deg/s
+
+    [Tooltip("Forward linear acceleration in m/s^2.")]
+    [SerializeField] private float acceleration = 2.5f; // m/s^2
+
+    [Tooltip("Linear braking deceleration in m/s^2.")]
+    [SerializeField] private float deceleration = 3.5f; // m/s^2
+
+    [Tooltip("Minimum cornering speed multiplier during sharp turns (e.g. 0.5 = 50% cruise speed).")]
+    [SerializeField] private float minCornerSpeedRatio = 0.5f;
+
+    [Header("Legacy / Compatibility Settings")]
+    [SerializeField] private float rotationSpeed = 8.0f;
     [SerializeField] private bool useRigidbody;
     [SerializeField] private bool showGizmos = true;
 
@@ -16,12 +38,14 @@ public class PathFollower : MonoBehaviour
     private List<Node> currentPath;
     private int pathIndex;
     private bool isFollowing;
+    private float currentFlightSpeed = 0f;
     private Vector3 currentVelocity;
     private Vector3 lastPosition;
 
     // Runtime Telemetry for Autonomous Subsystems
     public bool IsFollowing => isFollowing;
     public int CurrentWaypointIndex => pathIndex;
+    public float CurrentFlightSpeed => currentFlightSpeed;
     public Vector3 CurrentVelocity => isFollowing ? currentVelocity : Vector3.zero;
     public Vector3 TargetWaypoint => (currentPath != null && pathIndex < currentPath.Count) ? GetTargetPosition(currentPath[pathIndex]) : transform.position;
     public IReadOnlyList<Node> RemainingPath => (currentPath != null && pathIndex < currentPath.Count)
@@ -36,6 +60,30 @@ public class PathFollower : MonoBehaviour
     {
         get => moveSpeed;
         set => moveSpeed = Mathf.Max(0f, value);
+    }
+
+    public float MaxYawRate
+    {
+        get => maxYawRate;
+        set => maxYawRate = Mathf.Max(10.0f, value);
+    }
+
+    public float Acceleration
+    {
+        get => acceleration;
+        set => acceleration = Mathf.Max(0.1f, value);
+    }
+
+    public float Deceleration
+    {
+        get => deceleration;
+        set => deceleration = Mathf.Max(0.1f, value);
+    }
+
+    public float MinCornerSpeedRatio
+    {
+        get => minCornerSpeedRatio;
+        set => minCornerSpeedRatio = Mathf.Clamp01(value);
     }
 
     public float RotationSpeed
@@ -63,7 +111,13 @@ public class PathFollower : MonoBehaviour
         pathIndex = 0;
         isFollowing = true;
         lastPosition = transform.position;
-        currentVelocity = Vector3.zero;
+
+        // If initiating from rest, reset speed to 0; if replanning mid-flight, preserve momentum
+        if (currentVelocity.sqrMagnitude < 0.01f)
+        {
+            currentFlightSpeed = 0f;
+        }
+
         UpdateRemainingPathLine();
     }
 
@@ -72,6 +126,7 @@ public class PathFollower : MonoBehaviour
         isFollowing = false;
         currentPath = null;
         pathIndex = 0;
+        currentFlightSpeed = 0f;
         currentVelocity = Vector3.zero;
     }
 
@@ -86,7 +141,6 @@ public class PathFollower : MonoBehaviour
 
         MoveAlongPath(
             transform.position,
-            moveSpeed * Time.deltaTime,
             Time.deltaTime,
             position => transform.position = position,
             rotation => transform.rotation = rotation);
@@ -99,15 +153,17 @@ public class PathFollower : MonoBehaviour
 
         MoveAlongPath(
             rb.position,
-            moveSpeed * Time.fixedDeltaTime,
             Time.fixedDeltaTime,
             rb.MovePosition,
             rb.MoveRotation);
     }
 
+    [Header("Debug & Telemetry")]
+    [SerializeField] private bool enableDebugLogging = true;
+    private float nextDebugLogTime = 0f;
+
     private void MoveAlongPath(
         Vector3 currentPosition,
-        float step,
         float deltaTime,
         Action<Vector3> applyPosition,
         Action<Quaternion> applyRotation)
@@ -118,10 +174,11 @@ public class PathFollower : MonoBehaviour
             return;
         }
 
-        // Keep moving through each waypoint sequentially and only advance after reaching it.
         Vector3 target = GetTargetPosition(currentPath[pathIndex]);
+        float distToActiveWaypoint = Vector3.Distance(currentPosition, target);
 
-        if (Vector3.Distance(currentPosition, target) <= nodeReachThreshold)
+        // Advance to next waypoint if already within reach radius
+        if (distToActiveWaypoint <= nodeReachThreshold)
         {
             pathIndex++;
             if (pathIndex >= currentPath.Count)
@@ -132,26 +189,94 @@ public class PathFollower : MonoBehaviour
             }
 
             target = GetTargetPosition(currentPath[pathIndex]);
+            distToActiveWaypoint = Vector3.Distance(currentPosition, target);
         }
+
+        // 1. Heading Alignment & Maximum Yaw Rate Clamping (deg/s)
+        Vector3 toTarget = target - currentPosition;
+        toTarget.y = 0f;
+        float headingErrorDeg = 0f;
+
+        Quaternion currentRot = (useRigidbody && rb != null) ? rb.rotation : transform.rotation;
+        if (toTarget.sqrMagnitude > 0.0001f)
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
+            headingErrorDeg = Quaternion.Angle(currentRot, targetRotation);
+
+            // Enforce strict maximum angular turn rate
+            Quaternion newRotation = Quaternion.RotateTowards(currentRot, targetRotation, maxYawRate * deltaTime);
+            applyRotation(newRotation);
+        }
+
+        // 2. Adaptive Cornering Target Speed (Immediate Heading Deviation + Lookahead Anticipation)
+        float cornerFactor = Mathf.Clamp01(Mathf.Cos(headingErrorDeg * Mathf.Deg2Rad));
+        float targetSpeed = Mathf.Lerp(moveSpeed * minCornerSpeedRatio, moveSpeed, cornerFactor);
+
+        // Lookahead: Anticipate sharp turns at upcoming waypoints and brake before reaching the corner
+        if (pathIndex < currentPath.Count - 1)
+        {
+            Vector3 nextTarget = GetTargetPosition(currentPath[pathIndex + 1]);
+            Vector3 currentSegmentDir = (target - currentPosition).normalized;
+            Vector3 nextSegmentDir = (nextTarget - target).normalized;
+            currentSegmentDir.y = 0f;
+            nextSegmentDir.y = 0f;
+
+            float upcomingTurnAngle = Vector3.Angle(currentSegmentDir, nextSegmentDir);
+            if (upcomingTurnAngle > 25f)
+            {
+                float turnSeverity = Mathf.Clamp01(upcomingTurnAngle / 90f);
+                float desiredCornerEntrySpeed = Mathf.Lerp(moveSpeed, moveSpeed * minCornerSpeedRatio, turnSeverity);
+                float requiredBrakingDist = Mathf.Max(0.5f, (currentFlightSpeed * currentFlightSpeed - desiredCornerEntrySpeed * desiredCornerEntrySpeed) / (2f * deceleration));
+
+                if (distToActiveWaypoint <= requiredBrakingDist)
+                {
+                    float brakeProgress = Mathf.Clamp01(distToActiveWaypoint / requiredBrakingDist);
+                    float anticipatorySpeed = Mathf.Lerp(desiredCornerEntrySpeed, moveSpeed, brakeProgress);
+                    targetSpeed = Mathf.Min(targetSpeed, anticipatorySpeed);
+                }
+            }
+        }
+
+        // 3. Terminal Deceleration Check (smooth arrival at mission destination)
+        if (pathIndex == currentPath.Count - 1)
+        {
+            float stoppingSpeed = Mathf.Sqrt(2f * deceleration * Mathf.Max(0.01f, distToActiveWaypoint));
+            targetSpeed = Mathf.Min(targetSpeed, stoppingSpeed);
+        }
+
+        // Maintain minimum flight velocity so the UAV never deadlocks
+        targetSpeed = Mathf.Max(targetSpeed, 0.25f);
+
+        // 4. Smooth Acceleration / Deceleration Integration
+        if (currentFlightSpeed < targetSpeed)
+        {
+            currentFlightSpeed = Mathf.MoveTowards(currentFlightSpeed, targetSpeed, acceleration * deltaTime);
+        }
+        else
+        {
+            currentFlightSpeed = Mathf.MoveTowards(currentFlightSpeed, targetSpeed, deceleration * deltaTime);
+        }
+
+        // 5. Translational Step Integration (Heading-Coupled Translation)
+        // Ensure the UAV moves forward primarily along its heading rather than sliding sideways at 90 deg
+        float forwardAlignment = Mathf.Max(0.20f, Mathf.Cos(headingErrorDeg * Mathf.Deg2Rad));
+        float effectiveDisplacementSpeed = currentFlightSpeed * forwardAlignment;
+        float step = effectiveDisplacementSpeed * deltaTime;
 
         Vector3 newPosition = Vector3.MoveTowards(currentPosition, target, step);
         applyPosition(newPosition);
 
-        // Smooth heading alignment toward the active waypoint target
-        Vector3 moveDirection = target - newPosition;
-        moveDirection.y = 0f;
-        if (moveDirection.sqrMagnitude > 0.0001f)
-        {
-            Quaternion targetRotation = Quaternion.LookRotation(moveDirection.normalized, Vector3.up);
-            Quaternion currentRot = useRigidbody && rb != null ? rb.rotation : transform.rotation;
-            Quaternion newRotation = Quaternion.Slerp(currentRot, targetRotation, rotationSpeed * deltaTime);
-            applyRotation(newRotation);
-        }
-
-        // Compute actual velocity based on physical displacement over time
+        // 6. Actual Velocity Calculation for Telemetry & Perception
         Vector3 displacement = newPosition - currentPosition;
         currentVelocity = deltaTime > 0.00001f ? (displacement / deltaTime) : Vector3.zero;
         lastPosition = newPosition;
+
+        // Periodic low-frequency debug logging (every 0.5s)
+        if (enableDebugLogging && Time.time >= nextDebugLogTime)
+        {
+            nextDebugLogTime = Time.time + 0.5f;
+            Debug.Log($"[PathFollower] Speed: {currentFlightSpeed:F2} m/s (Target: {targetSpeed:F2}) | HeadingErr: {headingErrorDeg:F1}° | Waypoint: {pathIndex + 1}/{currentPath.Count}");
+        }
 
         if (Vector3.Distance(newPosition, target) <= nodeReachThreshold)
         {

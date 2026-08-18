@@ -38,13 +38,27 @@ public class PathfindingRuntimeSetup : MonoBehaviour
             pathfinding.targetTransform.position = effectiveTarget;
         pathfinding.agentSpawnPosition = effectiveStart;
 
+        ObstacleDistributionMode effectiveMode = scenarioConfig != null ? scenarioConfig.distributionMode : ObstacleDistributionMode.Uniform;
+        float effectiveFocusWeight = scenarioConfig != null ? scenarioConfig.corridorFocusWeight : 0.0f;
+        float effectiveCorridorWidth = scenarioConfig != null ? scenarioConfig.corridorWidth : 10.0f;
+
         ProceduralObstacleGenerator.Generate(
             gridManager.transform,
             gridManager.gridWorldSize,
             effectiveStart,
             effectiveTarget,
             effectiveObstacleCount,
-            effectiveSeed);
+            effectiveSeed,
+            effectiveMode,
+            effectiveFocusWeight,
+            effectiveCorridorWidth);
+
+        if (scenarioConfig != null)
+        {
+            gridManager.enableClearancePotentialField = scenarioConfig.enableClearancePenalty;
+            gridManager.clearanceSafetyThreshold = scenarioConfig.clearanceSafetyThreshold;
+            gridManager.maxClearancePenalty = scenarioConfig.maxClearancePenalty;
+        }
 
         gridManager.CreateGrid();
         SpawnAndRegisterUav(pathfinding);
