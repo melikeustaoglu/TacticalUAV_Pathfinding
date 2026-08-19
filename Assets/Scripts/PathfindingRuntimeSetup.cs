@@ -95,6 +95,9 @@ public class PathfindingRuntimeSetup : MonoBehaviour
             if (pathFollower != null)
             {
                 pathFollower.MoveSpeed = scenarioConfig.uavMoveSpeed;
+                pathFollower.MinFlightAltitude = scenarioConfig.minFlightAltitude;
+                pathFollower.MaxFlightAltitude = scenarioConfig.maxFlightAltitude;
+                pathFollower.SetTargetAltitude(scenarioConfig.nominalFlightAltitude);
             }
             if (uavPerception != null)
             {

@@ -28,6 +28,28 @@ public class PathFollower : MonoBehaviour
     [Tooltip("Minimum cornering speed multiplier during sharp turns (e.g. 0.5 = 50% cruise speed).")]
     [SerializeField] private float minCornerSpeedRatio = 0.5f;
 
+    [Header("Vertical Flight Kinematics")]
+    [Tooltip("Maximum vertical climb rate in meters per second.")]
+    [SerializeField] private float maxClimbRate = 1.5f;
+
+    [Tooltip("Maximum vertical descent rate in meters per second.")]
+    [SerializeField] private float maxDescentRate = 2.0f;
+
+    [Tooltip("Vertical linear acceleration in m/s^2.")]
+    [SerializeField] private float verticalAcceleration = 2.0f;
+
+    [Tooltip("Vertical linear braking deceleration in m/s^2.")]
+    [SerializeField] private float verticalDeceleration = 2.5f;
+
+    [Tooltip("Vertical altitude arrival threshold in meters.")]
+    [SerializeField] private float altitudeReachThreshold = 0.1f;
+
+    [Tooltip("Minimum allowable flight altitude in meters.")]
+    [SerializeField] private float minFlightAltitude = 1.0f;
+
+    [Tooltip("Maximum allowable flight altitude (ceiling) in meters.")]
+    [SerializeField] private float maxFlightAltitude = 6.0f;
+
     [Header("Legacy / Compatibility Settings")]
     [SerializeField] private float rotationSpeed = 8.0f;
     [SerializeField] private bool useRigidbody;
@@ -39,6 +61,8 @@ public class PathFollower : MonoBehaviour
     private int pathIndex;
     private bool isFollowing;
     private float currentFlightSpeed = 0f;
+    private float currentVerticalSpeed = 0f;
+    private float targetAltitude = 1.0f;
     private Vector3 currentVelocity;
     private Vector3 lastPosition;
 
@@ -46,6 +70,7 @@ public class PathFollower : MonoBehaviour
     public bool IsFollowing => isFollowing;
     public int CurrentWaypointIndex => pathIndex;
     public float CurrentFlightSpeed => currentFlightSpeed;
+    public float CurrentVerticalSpeed => currentVerticalSpeed;
     public Vector3 CurrentVelocity => isFollowing ? currentVelocity : Vector3.zero;
     public Vector3 TargetWaypoint => (currentPath != null && pathIndex < currentPath.Count) ? GetTargetPosition(currentPath[pathIndex]) : transform.position;
     public IReadOnlyList<Node> RemainingPath => (currentPath != null && pathIndex < currentPath.Count)
@@ -84,6 +109,59 @@ public class PathFollower : MonoBehaviour
     {
         get => minCornerSpeedRatio;
         set => minCornerSpeedRatio = Mathf.Clamp01(value);
+    }
+
+    public float MaxClimbRate
+    {
+        get => maxClimbRate;
+        set => maxClimbRate = Mathf.Max(0.1f, value);
+    }
+
+    public float MaxDescentRate
+    {
+        get => maxDescentRate;
+        set => maxDescentRate = Mathf.Max(0.1f, value);
+    }
+
+    public float VerticalAcceleration
+    {
+        get => verticalAcceleration;
+        set => verticalAcceleration = Mathf.Max(0.1f, value);
+    }
+
+    public float VerticalDeceleration
+    {
+        get => verticalDeceleration;
+        set => verticalDeceleration = Mathf.Max(0.1f, value);
+    }
+
+    public float AltitudeReachThreshold
+    {
+        get => altitudeReachThreshold;
+        set => altitudeReachThreshold = Mathf.Max(0.01f, value);
+    }
+
+    public float MinFlightAltitude
+    {
+        get => minFlightAltitude;
+        set => minFlightAltitude = Mathf.Max(0.1f, value);
+    }
+
+    public float MaxFlightAltitude
+    {
+        get => maxFlightAltitude;
+        set => maxFlightAltitude = Mathf.Max(minFlightAltitude, value);
+    }
+
+    public float TargetAltitude
+    {
+        get => targetAltitude;
+        set => targetAltitude = Mathf.Clamp(value, minFlightAltitude, maxFlightAltitude);
+    }
+
+    public void SetTargetAltitude(float altitude)
+    {
+        targetAltitude = Mathf.Clamp(altitude, minFlightAltitude, maxFlightAltitude);
     }
 
     public float RotationSpeed
@@ -135,6 +213,7 @@ public class PathFollower : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         pathfinding = FindFirstObjectByType<Pathfinding>();
         lastPosition = transform.position;
+        targetAltitude = transform.position.y;
     }
 
     public void StartFollowing(List<Node> path)
@@ -154,6 +233,7 @@ public class PathFollower : MonoBehaviour
         if (currentVelocity.sqrMagnitude < 0.01f)
         {
             currentFlightSpeed = 0f;
+            currentVerticalSpeed = 0f;
         }
 
         UpdateRemainingPathLine();
@@ -165,6 +245,7 @@ public class PathFollower : MonoBehaviour
         currentPath = null;
         pathIndex = 0;
         currentFlightSpeed = 0f;
+        currentVerticalSpeed = 0f;
         currentVelocity = Vector3.zero;
     }
 
@@ -230,20 +311,20 @@ public class PathFollower : MonoBehaviour
             distToActiveWaypoint = Vector3.Distance(currentPosition, target);
         }
 
-        // 1. Heading Alignment & Maximum Yaw Rate Clamping (deg/s)
+        // 1. Heading Alignment & Maximum Yaw Rate Clamping (deg/s) (Strictly Horizontal Heading)
         Vector3 toTarget = target - currentPosition;
         toTarget.y = 0f;
         float headingErrorDeg = 0f;
+        float targetYawDeg = 0f;
 
         Quaternion currentRot = (useRigidbody && rb != null) ? rb.rotation : transform.rotation;
+        float currentYaw = currentRot.eulerAngles.y;
+
         if (toTarget.sqrMagnitude > 0.0001f)
         {
-            Quaternion targetRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
-            headingErrorDeg = Quaternion.Angle(currentRot, targetRotation);
-
-            // Enforce strict maximum angular turn rate
-            Quaternion newRotation = Quaternion.RotateTowards(currentRot, targetRotation, maxYawRate * deltaTime);
-            applyRotation(newRotation);
+            Quaternion targetYawRotation = Quaternion.LookRotation(toTarget.normalized, Vector3.up);
+            targetYawDeg = targetYawRotation.eulerAngles.y;
+            headingErrorDeg = Quaternion.Angle(Quaternion.Euler(0f, currentYaw, 0f), targetYawRotation);
         }
 
         // Check for speed override expiration
@@ -297,7 +378,7 @@ public class PathFollower : MonoBehaviour
         // Maintain minimum flight velocity so the UAV never deadlocks
         targetSpeed = Mathf.Max(targetSpeed, 0.25f);
 
-        // 4. Smooth Acceleration / Deceleration Integration
+        // 4. Smooth Horizontal Acceleration / Deceleration Integration
         if (currentFlightSpeed < targetSpeed)
         {
             currentFlightSpeed = Mathf.MoveTowards(currentFlightSpeed, targetSpeed, acceleration * deltaTime);
@@ -307,16 +388,57 @@ public class PathFollower : MonoBehaviour
             currentFlightSpeed = Mathf.MoveTowards(currentFlightSpeed, targetSpeed, deceleration * deltaTime);
         }
 
-        // 5. Translational Step Integration (Heading-Coupled Translation)
-        // Ensure the UAV moves forward primarily along its heading rather than sliding sideways at 90 deg
+        // 5. Horizontal Translational Step Integration (Heading-Coupled Translation)
         float forwardAlignment = Mathf.Max(0.20f, Mathf.Cos(headingErrorDeg * Mathf.Deg2Rad));
         float effectiveDisplacementSpeed = currentFlightSpeed * forwardAlignment;
-        float step = effectiveDisplacementSpeed * deltaTime;
+        float horizontalStep = effectiveDisplacementSpeed * deltaTime;
 
-        Vector3 newPosition = Vector3.MoveTowards(currentPosition, target, step);
+        Vector3 targetHorizontal = new Vector3(target.x, currentPosition.y, target.z);
+        Vector3 newHorizontalPos = Vector3.MoveTowards(currentPosition, targetHorizontal, horizontalStep);
+
+        // 6. Vertical Velocity & Altitude Integration (Climb / Descent Dynamics)
+        float targetY = Mathf.Clamp(target.y, minFlightAltitude, maxFlightAltitude);
+        float altitudeDelta = targetY - currentPosition.y;
+        float desiredVy = 0f;
+
+        if (Mathf.Abs(altitudeDelta) > altitudeReachThreshold)
+        {
+            float maxRate = altitudeDelta > 0f ? maxClimbRate : maxDescentRate;
+            float brakingSpeed = Mathf.Sqrt(2f * verticalDeceleration * Mathf.Abs(altitudeDelta));
+            desiredVy = Mathf.Sign(altitudeDelta) * Mathf.Min(maxRate, brakingSpeed);
+        }
+
+        float vAccel = (Mathf.Abs(desiredVy) > Mathf.Abs(currentVerticalSpeed)) ? verticalAcceleration : verticalDeceleration;
+        currentVerticalSpeed = Mathf.MoveTowards(currentVerticalSpeed, desiredVy, vAccel * deltaTime);
+
+        float newY = currentPosition.y + currentVerticalSpeed * deltaTime;
+        if ((altitudeDelta > 0f && newY > targetY) || (altitudeDelta < 0f && newY < targetY))
+        {
+            newY = targetY;
+            currentVerticalSpeed = 0f;
+        }
+
+        Vector3 newPosition = new Vector3(newHorizontalPos.x, newY, newHorizontalPos.z);
         applyPosition(newPosition);
 
-        // 6. Actual Velocity Calculation for Telemetry & Perception
+        // 7. Rotation: Horizontal Yaw Tracking + Visual Pitch Attitude Clamped to [-30, +30] deg
+        float newYaw = currentYaw;
+        if (toTarget.sqrMagnitude > 0.0001f)
+        {
+            newYaw = Mathf.MoveTowardsAngle(currentYaw, targetYawDeg, maxYawRate * deltaTime);
+        }
+
+        float desiredPitch = 0f;
+        if (Mathf.Abs(currentVerticalSpeed) > 0.01f && currentFlightSpeed > 0.01f)
+        {
+            float pitchRad = Mathf.Atan2(currentVerticalSpeed, currentFlightSpeed);
+            desiredPitch = Mathf.Clamp(-pitchRad * Mathf.Rad2Deg, -30f, 30f);
+        }
+
+        Quaternion newRotation = Quaternion.Euler(desiredPitch, newYaw, 0f);
+        applyRotation(newRotation);
+
+        // 8. 3D Velocity Calculation for Telemetry & Perception
         Vector3 displacement = newPosition - currentPosition;
         currentVelocity = deltaTime > 0.00001f ? (displacement / deltaTime) : Vector3.zero;
         lastPosition = newPosition;
@@ -325,7 +447,7 @@ public class PathFollower : MonoBehaviour
         if (enableDebugLogging && Time.time >= nextDebugLogTime)
         {
             nextDebugLogTime = Time.time + 0.5f;
-            Debug.Log($"[PathFollower] Speed: {currentFlightSpeed:F2} m/s (Target: {targetSpeed:F2}) | HeadingErr: {headingErrorDeg:F1}° | Waypoint: {pathIndex + 1}/{currentPath.Count}");
+            Debug.Log($"[PathFollower] Speed: {currentFlightSpeed:F2} m/s (Vert: {currentVerticalSpeed:F2} m/s, Alt: {newPosition.y:F2}m) | HeadingErr: {headingErrorDeg:F1}° | Waypoint: {pathIndex + 1}/{currentPath.Count}");
         }
 
         if (Vector3.Distance(newPosition, target) <= nodeReachThreshold)
@@ -361,7 +483,16 @@ public class PathFollower : MonoBehaviour
 
     private Vector3 GetTargetPosition(Node node)
     {
-        return new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z);
+        if (node == null)
+            return new Vector3(transform.position.x, targetAltitude, transform.position.z);
+
+        float targetY = targetAltitude;
+        if (node.worldPosition.y > 0.001f && Mathf.Abs(node.worldPosition.y - transform.position.y) > 0.001f)
+        {
+            targetY = Mathf.Clamp(node.worldPosition.y, minFlightAltitude, maxFlightAltitude);
+        }
+
+        return new Vector3(node.worldPosition.x, targetY, node.worldPosition.z);
     }
 
     private void OnDrawGizmos()
