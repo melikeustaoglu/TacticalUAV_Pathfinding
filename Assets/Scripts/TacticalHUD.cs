@@ -367,6 +367,7 @@ public class TacticalHUD : MonoBehaviour
             : (threatLevel >= ThreatLevel.Warning ? 1 : 0);
         int peakThreats = replanningController != null ? replanningController.PeakSimultaneousThreats : activeThreatsCount;
         int pacingCount = replanningController != null ? replanningController.SpeedPacingCount : 0;
+        int verticalCount = replanningController != null ? replanningController.VerticalEvasionCount : 0;
         int spatialCount = replanningController != null ? replanningController.SpatialReplanCount : (replanningController != null ? replanningController.ReplanCount : missionManager.TotalReplans);
         int totalReplans = replanningController != null ? replanningController.ReplanCount : missionManager.TotalReplans;
 
@@ -376,32 +377,42 @@ public class TacticalHUD : MonoBehaviour
             speedStr += $" <color=#FFAA00>[VO Pacing: {pathFollower.CurrentSpeedOverrideRatio * 100f:F0}%]</color>";
         }
 
+        float nominalAlt = replanningController != null ? replanningController.NominalAltitude : 1.0f;
         string evasionModeStr = "<color=#33FF88>NORMAL</color>";
         if (replanningController != null)
         {
-            switch (replanningController.State)
+            if (pathFollower != null && pathFollower.IsSpeedOverrideActive)
             {
-                case NavigationState.ThreatDetected:
-                    evasionModeStr = "<color=#FFFF44>THREAT TRACKING</color>";
-                    break;
-                case NavigationState.Replanning:
-                    evasionModeStr = "<color=#FF4444>SPATIAL REPLANNING</color>";
-                    break;
-                case NavigationState.Rerouting:
-                    evasionModeStr = pathFollower != null && pathFollower.IsSpeedOverrideActive
-                        ? "<color=#FFAA00>VO SPEED PACING</color>"
-                        : "<color=#00FFFF>A* DETOUR EXECUTION</color>";
-                    break;
-                case NavigationState.NoSafePath:
-                    evasionModeStr = "<color=#FF2222>SAFE HOLD</color>";
-                    break;
+                evasionModeStr = "<color=#FFAA00>VO SPEED PACING</color>";
+            }
+            else if (pathFollower != null && (pathFollower.TargetAltitude > nominalAlt + 0.1f || uavPos.y > nominalAlt + 0.1f))
+            {
+                evasionModeStr = "<color=#33CCFF>VERTICAL STEP CLIMB</color>";
+            }
+            else
+            {
+                switch (replanningController.State)
+                {
+                    case NavigationState.ThreatDetected:
+                        evasionModeStr = "<color=#FFFF44>THREAT TRACKING</color>";
+                        break;
+                    case NavigationState.Replanning:
+                        evasionModeStr = "<color=#FF4444>SPATIAL REPLANNING</color>";
+                        break;
+                    case NavigationState.Rerouting:
+                        evasionModeStr = "<color=#00FFFF>A* DETOUR EXECUTION</color>";
+                        break;
+                    case NavigationState.NoSafePath:
+                        evasionModeStr = "<color=#FF2222>SAFE HOLD</color>";
+                        break;
+                }
             }
         }
 
         // Build Telemetry Block with High-Contrast Typography
         telemetrySb.Clear();
         telemetrySb.AppendLine("<color=#5EC8FF><b>── MISSION & NAVIGATION ─────────────────</b></color>");
-        telemetrySb.AppendLine($"<b><color=#88A2BF>Position:</color></b>      <color=#FFFFFF>X: <b>{uavPos.x,6:F2}</b> m,  Z: <b>{uavPos.z,6:F2}</b> m</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Position:</color></b>      <color=#FFFFFF>X: <b>{uavPos.x,5:F2}</b> m,  Y: <b>{uavPos.y,5:F2}</b> m,  Z: <b>{uavPos.z,5:F2}</b> m</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Target:</color></b>        <color=#FFFFFF>X: <b>{targetPos.x,6:F2}</b> m,  Z: <b>{targetPos.z,6:F2}</b> m</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Speed:</color></b>  {speedStr}");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Flight Time:</color></b>   <color=#FFFFFF><b>{missionManager.TotalFlightTime:F2}</b> s</color>");
@@ -413,7 +424,7 @@ public class TacticalHUD : MonoBehaviour
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Status:</color></b>   {threatBadgeStr}");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Active Threats:</color></b>  <color=#FFFFFF><b>{activeThreatsCount}</b></color>  <color=#88A2BF>(Peak: {peakThreats})</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Evasion Mode:</color></b>    {evasionModeStr}");
-        telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{totalReplans}</b></color>  <color=#88A2BF>(Pacing: {pacingCount} | Spatial: {spatialCount})</color>");
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{totalReplans}</b></color>  <color=#88A2BF>(Pacing: {pacingCount} | Vertical: {verticalCount} | Spatial: {spatialCount})</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Events:</color></b>   <color=#FFFFFF><b>{missionManager.TotalThreatEncounters}</b></color>  <color=#88A2BF>({missionManager.CriticalThreatCount} Critical)</color>");
 
         string clearanceStr = float.IsPositiveInfinity(missionManager.MinimumClearanceObserved)

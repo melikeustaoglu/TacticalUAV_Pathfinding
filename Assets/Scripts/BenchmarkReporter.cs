@@ -33,11 +33,15 @@ public class MissionBenchmarkReport
     [Header("Tactical Counters")]
     public int replans;
     public int speedPacingResolutions;
+    public int verticalEvasions;
     public int spatialDetours;
     public int peakSimultaneousThreats;
     public int threatEncounters;
     public int criticalThreats;
     public float minimumClearance;
+    public float peakAltitudeReached;
+    public float maxFlightAltitude;
+    public float nominalFlightAltitude;
 
     [Header("Evaluation Scores")]
     public float overallScore;
@@ -69,6 +73,8 @@ public class BenchmarkReporter : MonoBehaviour
     private UAVPerception perception;
     private ReplanningController replanningController;
 
+    private float peakAltitudeReached = 0f;
+
     public MissionBenchmarkReport LastReport { get; private set; }
     public string LastReportJson { get; private set; }
     public string LastExportPath { get; private set; }
@@ -80,6 +86,15 @@ public class BenchmarkReporter : MonoBehaviour
         pathFollower = GetComponent<PathFollower>() ?? FindFirstObjectByType<PathFollower>();
         perception = GetComponent<UAVPerception>() ?? FindFirstObjectByType<UAVPerception>();
         replanningController = GetComponent<ReplanningController>() ?? FindFirstObjectByType<ReplanningController>();
+    }
+
+    private void Update()
+    {
+        float currentY = pathFollower != null ? pathFollower.transform.position.y : transform.position.y;
+        if (currentY > peakAltitudeReached)
+        {
+            peakAltitudeReached = currentY;
+        }
     }
 
     private void OnEnable()
@@ -149,11 +164,15 @@ public class BenchmarkReporter : MonoBehaviour
         report.pathEfficiency = result.PathEfficiency;
         report.replans = result.TotalReplans;
         report.speedPacingResolutions = replanningController != null ? replanningController.SpeedPacingCount : 0;
+        report.verticalEvasions = replanningController != null ? replanningController.VerticalEvasionCount : 0;
         report.spatialDetours = replanningController != null ? replanningController.SpatialReplanCount : result.TotalReplans;
         report.peakSimultaneousThreats = replanningController != null ? replanningController.PeakSimultaneousThreats : 0;
         report.threatEncounters = result.TotalThreatEncounters;
         report.criticalThreats = result.CriticalThreatCount;
         report.minimumClearance = result.MinimumClearanceObserved;
+        report.peakAltitudeReached = Mathf.Max(peakAltitudeReached, pathFollower != null ? pathFollower.transform.position.y : transform.position.y);
+        report.maxFlightAltitude = pathFollower != null ? pathFollower.MaxFlightAltitude : (cfg != null ? cfg.maxFlightAltitude : 6.0f);
+        report.nominalFlightAltitude = cfg != null ? cfg.nominalFlightAltitude : (replanningController != null ? replanningController.NominalAltitude : 1.0f);
 
         // 3. Evaluation Scores
         float nominalSpeed = report.cruiseSpeed;

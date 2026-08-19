@@ -83,6 +83,8 @@ public class MissionEventLogger : MonoBehaviour
         {
             replanningController.OnPathReplanned += HandlePathReplanned;
             replanningController.OnNoSafePathFound += HandleNoSafePathFound;
+            replanningController.OnSpeedPacingApplied += HandleSpeedPacingApplied;
+            replanningController.OnVerticalEvasionExecuted += HandleVerticalEvasionExecuted;
         }
 
         if (threatAssessment != null)
@@ -115,6 +117,8 @@ public class MissionEventLogger : MonoBehaviour
         {
             replanningController.OnPathReplanned -= HandlePathReplanned;
             replanningController.OnNoSafePathFound -= HandleNoSafePathFound;
+            replanningController.OnSpeedPacingApplied -= HandleSpeedPacingApplied;
+            replanningController.OnVerticalEvasionExecuted -= HandleVerticalEvasionExecuted;
         }
 
         if (threatAssessment != null)
@@ -186,6 +190,18 @@ public class MissionEventLogger : MonoBehaviour
     private void HandleNoSafePathFound()
     {
         RecordEvent("NO_SAFE_PATH_FOUND", "A* search failed; no safe detour around obstacle");
+    }
+
+    private void HandleSpeedPacingApplied(float speedRatio, float duration)
+    {
+        RecordEvent("VO_SPEED_PACING_APPLIED",
+            $"Tactical speed override applied: {speedRatio:P0} cruise speed for {duration:F1}s");
+    }
+
+    private void HandleVerticalEvasionExecuted(float targetAltitude)
+    {
+        RecordEvent("VERTICAL_EVASION_EXECUTED",
+            $"Tactical step-climb commanded to altitude {targetAltitude:F2}m");
     }
 
     private void HandleCriticalThreatDetected(ThreatReport report)

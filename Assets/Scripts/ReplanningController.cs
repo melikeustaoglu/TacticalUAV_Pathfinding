@@ -48,6 +48,17 @@ public class ReplanningController : MonoBehaviour
     public event Action<NavigationState> OnStateChanged;
     public event Action<List<Node>> OnPathReplanned;
     public event Action OnNoSafePathFound;
+    public event Action<float, float> OnSpeedPacingApplied;
+    public event Action<float> OnVerticalEvasionExecuted;
+
+    [Header("Altitude Recovery Configuration")]
+    [SerializeField] private float nominalAltitude = 1.0f;
+
+    public float NominalAltitude
+    {
+        get => nominalAltitude;
+        set => nominalAltitude = Mathf.Max(0.5f, value);
+    }
 
     private PathFollower pathFollower;
     private ThreatAssessment threatAssessment;
@@ -85,6 +96,12 @@ public class ReplanningController : MonoBehaviour
         {
             threatAssessment.OnThreatEvaluated += HandleThreatEvaluated;
             threatAssessment.OnCriticalThreatDetected += HandleCriticalThreat;
+        }
+
+        PathfindingRuntimeSetup setup = FindFirstObjectByType<PathfindingRuntimeSetup>();
+        if (setup != null && setup.ScenarioConfig != null)
+        {
+            nominalAltitude = setup.ScenarioConfig.nominalFlightAltitude;
         }
     }
 
@@ -192,6 +209,7 @@ public class ReplanningController : MonoBehaviour
             }
 
             SetState(NavigationState.Rerouting);
+            OnSpeedPacingApplied?.Invoke(speedRatio, overrideDuration);
 
             if (logReplanningEvents)
             {
@@ -234,6 +252,7 @@ public class ReplanningController : MonoBehaviour
             }
 
             SetState(NavigationState.Rerouting);
+            OnVerticalEvasionExecuted?.Invoke(targetAltitude);
 
             if (logReplanningEvents)
             {
@@ -414,6 +433,7 @@ public class ReplanningController : MonoBehaviour
                 currentlyAvoidingObstacle = null;
                 currentlyAvoidingObstacles.Clear();
                 SetState(NavigationState.Normal);
+                RecoverNominalAltitude();
             }
         }
         else if (State == NavigationState.Normal)
@@ -422,13 +442,37 @@ public class ReplanningController : MonoBehaviour
             {
                 SetState(NavigationState.ThreatDetected);
             }
+            else if (!hasActiveThreats && Time.time - lastReplanTime >= replanCooldown)
+            {
+                RecoverNominalAltitude();
+            }
         }
         else if (State == NavigationState.ThreatDetected)
         {
             if (currentThreat == ThreatLevel.None && !hasActiveThreats)
             {
                 SetState(NavigationState.Normal);
+                if (Time.time - lastReplanTime >= replanCooldown)
+                {
+                    RecoverNominalAltitude();
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// Smoothly commands target altitude recovery toward nominal flight altitude
+    /// once the UAV has safely cleared all relevant obstacle volumes.
+    /// </summary>
+    public void RecoverNominalAltitude()
+    {
+        if (pathFollower == null)
+            return;
+
+        if (pathFollower.TargetAltitude > nominalAltitude + 0.05f)
+        {
+            float recoveryAlt = Mathf.Clamp(nominalAltitude, pathFollower.MinFlightAltitude, pathFollower.MaxFlightAltitude);
+            pathFollower.SetTargetAltitude(recoveryAlt);
         }
     }
 
