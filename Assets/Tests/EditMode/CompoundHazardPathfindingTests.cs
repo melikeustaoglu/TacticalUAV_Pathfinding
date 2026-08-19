@@ -235,11 +235,14 @@ public class CompoundHazardPathfindingTests
         };
         pathFollower.StartFollowing(path);
 
-        // Threat 1: Head-on critical threat at (0, 1, 8)
+        // Threat 1: Head-on critical threat with tall collider exceeding ceiling (forcing Stage 3 spatial fallback)
         GameObject obs1 = new GameObject("HeadOnThreat");
         obs1.transform.position = new Vector3(0f, 1f, 8f);
+        BoxCollider col1 = obs1.AddComponent<BoxCollider>();
+        col1.size = new Vector3(2f, 12f, 2f);
+        col1.center = new Vector3(0f, 5f, 0f);
         DetectedObstacle det1 = new DetectedObstacle(
-            obs1, null, obs1.transform.position, obs1.transform.position - uavObj.transform.position,
+            obs1, col1, obs1.transform.position, obs1.transform.position - uavObj.transform.position,
             Vector3.forward, 8f, 0f, Vector3.back, new Vector3(0f, 0f, -2.0f), isDynamic: true);
         ThreatReport rep1 = new ThreatReport(ThreatLevel.Critical, det1, new Vector3(0f, 1f, 4f), 4f, 2f, 0);
 

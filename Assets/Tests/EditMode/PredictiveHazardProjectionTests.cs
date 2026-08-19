@@ -175,10 +175,13 @@ public class PredictiveHazardProjectionTests
         FieldInfo lastReplanTimeField = typeof(ReplanningController).GetField("lastReplanTime", BindingFlags.NonPublic | BindingFlags.Instance);
         lastReplanTimeField?.SetValue(replanningController, Time.time - 5.0f);
 
-        // 2. Trigger spatial replan with head-on threat
+        // 2. Trigger spatial replan with head-on threat with tall collider exceeding ceiling
         GameObject headOnObs = new GameObject("HeadOnObs");
         headOnObs.transform.position = new Vector3(0f, 1f, 10f);
-        DetectedObstacle detHeadOn = new DetectedObstacle(headOnObs, null, headOnObs.transform.position, headOnObs.transform.position, Vector3.forward, 10f, 0f, Vector3.back, new Vector3(0f, 0f, -2f), true);
+        BoxCollider col = headOnObs.AddComponent<BoxCollider>();
+        col.size = new Vector3(2f, 12f, 2f);
+        col.center = new Vector3(0f, 5f, 0f);
+        DetectedObstacle detHeadOn = new DetectedObstacle(headOnObs, col, headOnObs.transform.position, headOnObs.transform.position, Vector3.forward, 10f, 0f, Vector3.back, new Vector3(0f, 0f, -2f), true);
         ThreatReport repHeadOn = new ThreatReport(ThreatLevel.Critical, detHeadOn, new Vector3(0f, 1f, 5f), 5f, 2.5f, 0);
 
         replanningController.TryExecuteReplan("Spatial Replan", repHeadOn);
@@ -197,9 +200,9 @@ public class PredictiveHazardProjectionTests
 
         List<ThreatReport> tripleThreats = new List<ThreatReport>
         {
-            new ThreatReport(ThreatLevel.Critical, default, new Vector3(0f, 1f, 6f), 6f, 3f, 0),
-            new ThreatReport(ThreatLevel.Warning, default, new Vector3(2f, 1f, 10f), 10f, 5f, 0),
-            new ThreatReport(ThreatLevel.Warning, default, new Vector3(-2f, 1f, 14f), 14f, 7f, 0)
+            new ThreatReport(ThreatLevel.Critical, default(DetectedObstacle), new Vector3(0f, 1f, 6f), 6f, 3f, 0),
+            new ThreatReport(ThreatLevel.Warning, default(DetectedObstacle), new Vector3(2f, 1f, 10f), 10f, 5f, 0),
+            new ThreatReport(ThreatLevel.Warning, default(DetectedObstacle), new Vector3(-2f, 1f, 14f), 14f, 7f, 0)
         };
 
         FieldInfo activeThreatsField = typeof(ThreatAssessment).GetField("activeThreatReports", BindingFlags.NonPublic | BindingFlags.Instance);

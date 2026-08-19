@@ -62,6 +62,7 @@ public class TacticalEvasionHierarchyTests
         obj.name = name;
         obj.transform.position = center;
         obj.transform.localScale = size;
+        Physics.SyncTransforms();
         BoxCollider col = obj.GetComponent<BoxCollider>();
 
         return new DetectedObstacle(
@@ -94,6 +95,7 @@ public class TacticalEvasionHierarchyTests
         obstacleObj.name = "DynamicThreat";
         obstacleObj.transform.position = new Vector3(-2f, 1f, 10f);
         obstacleObj.transform.localScale = Vector3.one * 1.5f;
+        Physics.SyncTransforms();
 
         DetectedObstacle dynObs = new DetectedObstacle(
             obstacleObj,
@@ -198,8 +200,8 @@ public class TacticalEvasionHierarchyTests
         };
         pathFollower.StartFollowing(path);
 
-        // Obstacle only 0.4m away (TTC = 0.2s), requires 2.5m climb which is kinematically impossible in 0.2s
-        DetectedObstacle closeObs = CreateObstacle("CloseObs", new Vector3(0f, 1.5f, 0.4f), new Vector3(2f, 3f, 2f), Vector3.zero, false);
+        // Obstacle front face is 0.4m away (TTC = 0.2s), requires 2.5m climb which is kinematically impossible in 0.2s
+        DetectedObstacle closeObs = CreateObstacle("CloseObs", new Vector3(0f, 1.5f, 1.4f), new Vector3(2f, 3f, 2f), Vector3.zero, false);
         obstacleObj = closeObs.GameObject;
 
         ThreatReport report = new ThreatReport(

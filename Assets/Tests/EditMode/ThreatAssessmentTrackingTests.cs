@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -27,21 +27,28 @@ public class ThreatAssessmentTrackingTests
 
         threatAssessment.SetStateProvider(stateProvider);
 
-        // Initialize state provider with nominal forward velocity (0, 0, 5)
-        stateProvider.SetGroundTruth(
-            Vector3.zero,
-            Quaternion.identity,
-            new Vector3(0f, 0f, 5.0f),
-            Vector3.zero,
-            Vector3.zero,
-            Vector3.zero,
-            0f);
+        // Initialize state provider with nominal ground truth state including forward velocity (0, 0, 5 m/s)
+        typeof(GroundTruthStateProvider).GetField("currentState", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(
+            stateProvider,
+            new EstimatedState(
+                Vector3.zero,
+                new Vector3(0f, 0f, 5f),
+                0f,
+                0f,
+                Vector3.zero,
+                0f,
+                Vector3.zero,
+                Vector3.zero,
+                0f,
+                Time.time,
+                EstimatorStatus.Nominal,
+                GpsFixState.Fix3D));
     }
 
     [TearDown]
     public void TearDown()
     {
-        if (uavObj != null) Object.DestroyImmediate(uavObj);
+        if (uavObj != null) UnityEngine.Object.DestroyImmediate(uavObj);
     }
 
     [Test]
@@ -102,11 +109,11 @@ public class ThreatAssessmentTrackingTests
     public void ThreatAssessment_UsesEstimatedTargetVelocityForCPA()
     {
         // UAV moving forward at (0, 0, 5)
-        // Target at (5, 0, 10), moving left at (-5, 0, 0)
-        // Relative closure reaches CPA
+        // Target at (2.5, 0, 5), moving left at (-5, 0, 0)
+        // Relative closure reaches CPA within Warning envelope
         TrackedTarget target = new TrackedTarget(
             1,
-            new Vector3(5f, 0f, 10f),
+            new Vector3(2.5f, 0f, 5f),
             new Vector3(-5f, 0f, 0f),
             Vector3.one * 0.04f,
             Vector3.one * 0.04f,

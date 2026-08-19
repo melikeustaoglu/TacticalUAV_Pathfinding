@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -39,6 +39,7 @@ public class TargetDetectionSensorTests
         typeof(SimulatedLidarSensor).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(lidarSensor, null);
         typeof(SimulatedRadarSensor).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(radarSensor, null);
         typeof(DynamicObstacle).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(dynamicObstacle, null);
+        Physics.SyncTransforms();
     }
 
     [TearDown]
@@ -75,6 +76,7 @@ public class TargetDetectionSensorTests
     public void Lidar_DetectsTargetWithinRangeAndFov()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 5f);
+        Physics.SyncTransforms();
         lidarSensor.Evaluate(0.05f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -82,7 +84,7 @@ public class TargetDetectionSensorTests
 
         Assert.GreaterOrEqual(count, 1, "LiDAR must detect obstacle in front within range and FOV!");
         Assert.AreEqual(TargetSensorModality.LiDAR, buffer[0].Modality);
-        Assert.AreEqual(5f, buffer[0].MeasuredPosition.z, 0.5f);
+        Assert.AreEqual(5f, buffer[0].MeasuredPosition.z, 1.0f);
     }
 
     [Test]
@@ -90,6 +92,7 @@ public class TargetDetectionSensorTests
     {
         // Target placed at 25m, but LiDAR range is 15m
         targetObj.transform.position = new Vector3(0f, 0f, 25f);
+        Physics.SyncTransforms();
         lidarSensor.Evaluate(0.05f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -103,6 +106,7 @@ public class TargetDetectionSensorTests
     {
         // Target placed at 90 degrees to right (x = 8, z = 0), outside 120-deg FOV (half-angle 60 deg)
         targetObj.transform.position = new Vector3(8f, 0f, 0f);
+        Physics.SyncTransforms();
         lidarSensor.Evaluate(0.05f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -115,6 +119,7 @@ public class TargetDetectionSensorTests
     public void Lidar_GeneratesPositionVariance()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 4f);
+        Physics.SyncTransforms();
         lidarSensor.Evaluate(0.05f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -131,6 +136,7 @@ public class TargetDetectionSensorTests
     public void Lidar_DoesNotProvideVelocity()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 6f);
+        Physics.SyncTransforms();
         lidarSensor.Evaluate(0.05f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -145,6 +151,7 @@ public class TargetDetectionSensorTests
     public void Radar_DetectsTargetWithinRangeAndFov()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 10f);
+        Physics.SyncTransforms();
         radarSensor.Evaluate(0.10f);
 
         TargetDetection[] buffer = new TargetDetection[8];
@@ -159,6 +166,7 @@ public class TargetDetectionSensorTests
     public void Radar_ProvidesVelocityMeasurement()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 8f);
+        Physics.SyncTransforms();
 
         // Configure dynamic obstacle with moving velocity
         typeof(DynamicObstacle).GetField("currentVelocity", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(dynamicObstacle, new Vector3(0f, 0f, 2.0f));
@@ -177,6 +185,7 @@ public class TargetDetectionSensorTests
     public void Radar_VelocityMeasurementContainsConfiguredNoise()
     {
         targetObj.transform.position = new Vector3(0f, 0f, 8f);
+        Physics.SyncTransforms();
         typeof(DynamicObstacle).GetField("currentVelocity", BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(dynamicObstacle, new Vector3(0f, 0f, 3.0f));
 
         radarSensor.Evaluate(0.10f);

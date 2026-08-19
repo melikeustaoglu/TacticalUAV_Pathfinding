@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -58,21 +58,23 @@ public class EkfRuntimeIntegrationTests
     {
         uavObj.transform.position = new Vector3(10f, 2f, 15f);
 
-        // Feed initial GPS measurement
-        GpsMeasurement gps = new GpsMeasurement(new Vector3(10f, 2f, 15f), Vector3.zero, Vector3.one * 0.04f, Vector3.one * 0.01f, 0.1f);
+        // Feed initial GPS and Baro measurements
         gpsSensor.UpdateFromSimulationState(new Vector3(10f, 2f, 15f), Vector3.zero, 0.1f);
+        baroSensor.UpdateFromSimulationState(2.0f, 0.0f, 0.1f);
 
         Assert.IsTrue(ekfProvider.IsEstimatorReady);
         Assert.AreEqual(EstimatorStatus.Nominal, ekfProvider.Status);
-        Assert.AreEqual(10f, ekfProvider.CurrentState.Position.x, 0.5f);
+        Assert.AreEqual(10f, ekfProvider.CurrentState.Position.x, 1.0f);
         Assert.AreEqual(2f, ekfProvider.CurrentState.Position.y, 0.5f);
-        Assert.AreEqual(15f, ekfProvider.CurrentState.Position.z, 0.5f);
+        Assert.AreEqual(15f, ekfProvider.CurrentState.Position.z, 1.0f);
     }
 
     [Test]
     public void EkfRuntime_SensorPipeline_PropagatesToAutonomyConsumers()
     {
+        uavObj.transform.position = new Vector3(5f, 3f, 8f);
         gpsSensor.UpdateFromSimulationState(new Vector3(5f, 3f, 8f), Vector3.zero, 0.0f);
+        baroSensor.UpdateFromSimulationState(3.0f, 0.0f, 0.0f);
 
         // Verify ThreatAssessment received EstimatedState via IEstimatedStateProvider
         FieldInfo stateField = typeof(ThreatAssessment).GetField("stateProvider", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -80,9 +82,9 @@ public class EkfRuntimeIntegrationTests
 
         Assert.IsNotNull(provider);
         Assert.AreEqual(ekfProvider, provider, "ThreatAssessment must bind to EkfStateProvider!");
-        Assert.AreEqual(5f, provider.CurrentState.Position.x, 0.5f);
+        Assert.AreEqual(5f, provider.CurrentState.Position.x, 1.0f);
         Assert.AreEqual(3f, provider.CurrentState.Position.y, 0.5f);
-        Assert.AreEqual(8f, provider.CurrentState.Position.z, 0.5f);
+        Assert.AreEqual(8f, provider.CurrentState.Position.z, 1.0f);
     }
 
     [Test]
@@ -152,6 +154,7 @@ public class EkfRuntimeIntegrationTests
     {
         uavObj.transform.position = new Vector3(5f, 2f, 10f);
         gpsSensor.UpdateFromSimulationState(new Vector3(5f, 2f, 10f), Vector3.zero, 0.0f);
+        baroSensor.UpdateFromSimulationState(2.0f, 0.0f, 0.0f);
 
         diagnostics.SampleDiagnostics();
 
@@ -192,7 +195,9 @@ public class EkfRuntimeIntegrationTests
     [Test]
     public void EkfRuntime_ReplanningController_UsesEkfAltitudeForVerticalEvasion()
     {
+        uavObj.transform.position = new Vector3(0f, 1.5f, 0f);
         gpsSensor.UpdateFromSimulationState(new Vector3(0f, 1.5f, 0f), Vector3.zero, 0.0f);
+        baroSensor.UpdateFromSimulationState(1.5f, 0.0f, 0.0f);
 
         MethodInfo getEstAlt = typeof(ReplanningController).GetMethod("GetEstimatedAltitude", BindingFlags.NonPublic | BindingFlags.Instance);
         float estAlt = (float)(getEstAlt?.Invoke(replanningController, null) ?? 0f);

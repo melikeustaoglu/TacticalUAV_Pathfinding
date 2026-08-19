@@ -141,6 +141,7 @@ public class ReplanningController : MonoBehaviour
     private ThreatAssessment threatAssessment;
     private UAVPerception perception;
     private Pathfinding pathfinding;
+    private IEstimatedStateProvider stateProvider;
 
     private float lastReplanTime = -10f;
     private int replanCount = 0;
@@ -287,7 +288,7 @@ public class ReplanningController : MonoBehaviour
             pathFollower.StopFollowing();
             SetState(NavigationState.NoSafePath);
             latestDecisionReason = TacticalDecisionReason.NoSafePathHold;
-            noSafePathHolds++;
+            safeHoldDecisions++;
             OnNoSafePathFound?.Invoke();
             OnTacticalDecisionMade?.Invoke(latestDecisionReason, "Estimator failed; entering Stage 4 Safe Hold");
             return false;
@@ -796,6 +797,10 @@ public class ReplanningController : MonoBehaviour
                 return true;
             }
         }
+
+        return false;
+    }
+
     /// <summary>
     /// Evaluates whether a tactical vertical step climb or descent can safely clear all active threats.
     /// Checks flight ceiling/floor bounds, climb-time feasibility at CPA, and multi-threat clearance.

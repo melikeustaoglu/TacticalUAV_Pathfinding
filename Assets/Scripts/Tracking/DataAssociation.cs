@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -16,13 +17,13 @@ public class DataAssociation
 
     // Preallocated working buffers for zero-allocation Hungarian solver
     private readonly float[,] costMatrix = new float[MaxTracks, MaxDetections];
-    private readonly float[,] paddedCost = new float[64, 64];
-    private readonly float[] u = new float[64];
-    private readonly float[] v = new float[64];
-    private readonly int[] p = new int[64];
-    private readonly int[] way = new int[64];
-    private readonly float[] minv = new float[64];
-    private readonly bool[] used = new bool[64];
+    private readonly float[,] paddedCost = new float[MaxTracks, MaxDetections];
+    private readonly float[] u = new float[MaxTracks + 1];
+    private readonly float[] v = new float[MaxTracks + 1];
+    private readonly int[] p = new int[MaxTracks + 1];
+    private readonly int[] way = new int[MaxTracks + 1];
+    private readonly float[] minv = new float[MaxTracks + 1];
+    private readonly bool[] used = new bool[MaxTracks + 1];
 
     private readonly int[] trackAssignment = new int[MaxTracks];
     private readonly int[] detectionAssignment = new int[MaxDetections];

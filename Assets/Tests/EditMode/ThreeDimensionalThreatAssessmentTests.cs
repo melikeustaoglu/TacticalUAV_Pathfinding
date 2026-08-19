@@ -52,6 +52,7 @@ public class ThreeDimensionalThreatAssessmentTests
         obstacleObj.name = "TestStaticObstacle";
         obstacleObj.transform.position = center;
         obstacleObj.transform.localScale = size;
+        Physics.SyncTransforms();
 
         BoxCollider col = obstacleObj.GetComponent<BoxCollider>();
 
@@ -74,6 +75,7 @@ public class ThreeDimensionalThreatAssessmentTests
         obstacleObj.name = "TestDynamicObstacle";
         obstacleObj.transform.position = center;
         obstacleObj.transform.localScale = size;
+        Physics.SyncTransforms();
 
         BoxCollider col = obstacleObj.GetComponent<BoxCollider>();
 
@@ -247,8 +249,8 @@ public class ThreeDimensionalThreatAssessmentTests
     [Test]
     public void ThreatAssessment_WarningAndAdvisoryThresholds_RespectVerticalSeparation()
     {
-        // Obstacle placed laterally at X = 1.5m, Z = 8m (inside warning radius 2.2m)
-        DetectedObstacle obs = CreateStaticObstacle(new Vector3(1.5f, 1.0f, 8f), new Vector3(2f, 2f, 2f));
+        // Obstacle placed laterally at X = 2.5m, Z = 8m (surface at X = 1.5m, inside warning radius 2.2m and outside safety radius 1.0m)
+        DetectedObstacle obs = CreateStaticObstacle(new Vector3(2.5f, 1.0f, 8f), new Vector3(2f, 2f, 2f));
 
         // Case A: UAV at Y = 1.0m (no vertical separation)
         uavObj.transform.position = new Vector3(0f, 1.0f, 0f);

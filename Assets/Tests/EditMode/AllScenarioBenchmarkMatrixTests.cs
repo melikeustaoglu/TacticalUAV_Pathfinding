@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using NUnit.Framework;
@@ -93,9 +93,9 @@ public class AllScenarioBenchmarkMatrixTests
     [TearDown]
     public void TearDown()
     {
-        if (targetObj != null) Object.DestroyImmediate(targetObj);
-        if (obstacleParentObj != null) Object.DestroyImmediate(obstacleParentObj);
-        if (uavObj != null) Object.DestroyImmediate(uavObj);
+        if (targetObj != null) UnityEngine.Object.DestroyImmediate(targetObj);
+        if (obstacleParentObj != null) UnityEngine.Object.DestroyImmediate(obstacleParentObj);
+        if (uavObj != null) UnityEngine.Object.DestroyImmediate(uavObj);
     }
 
     [Test]
@@ -124,19 +124,23 @@ public class AllScenarioBenchmarkMatrixTests
         Assert.IsNotNull(config);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
+            config.obstacleCount,
             config.seed,
-            config.enableVariableObstacleHeights,
-            config.minObstacleHeight,
-            config.maxObstacleHeight,
+            config.distributionMode,
+            config.corridorFocusWeight,
+            config.corridorWidth,
             config.enableDynamicObstacles,
             config.dynamicObstacleCount,
             config.dynamicObstacleSpeed,
-            config.dynamicObstacleMovementMode,
-            config.dynamicObstacleLoopMode);
+            ObstacleMovementMode.Patrol,
+            PatrolLoopMode.PingPong,
+            config.enableVariableObstacleHeights,
+            config.minObstacleHeight,
+            config.maxObstacleHeight).gameObject;
 
         gridManager.CreateGrid();
         pathfinding.FindPath(config.startPosition, config.targetPosition);
@@ -151,14 +155,15 @@ public class AllScenarioBenchmarkMatrixTests
     {
         UAVScenarioConfig config = AssetDatabase.LoadAssetAtPath<UAVScenarioConfig>("Assets/Scenarios/Scenario_AlternativeSeed.asset");
         Assert.IsNotNull(config);
-        Assert.AreEqual(9999, config.seed);
+        Assert.AreEqual(100, config.seed);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
-            config.seed);
+            config.obstacleCount,
+            config.seed).gameObject;
 
         gridManager.CreateGrid();
         pathfinding.FindPath(config.startPosition, config.targetPosition);
@@ -172,19 +177,20 @@ public class AllScenarioBenchmarkMatrixTests
     {
         UAVScenarioConfig config = AssetDatabase.LoadAssetAtPath<UAVScenarioConfig>("Assets/Scenarios/Scenario_DenseObstacles.asset");
         Assert.IsNotNull(config);
-        Assert.AreEqual(25, config.obstacleCount);
+        Assert.AreEqual(18, config.obstacleCount);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
-            config.seed);
+            config.obstacleCount,
+            config.seed).gameObject;
 
         gridManager.CreateGrid();
         pathfinding.FindPath(config.startPosition, config.targetPosition);
 
-        Assert.AreEqual(25, obstacleParentObj.transform.childCount);
+        Assert.AreEqual(18, obstacleParentObj.transform.childCount);
     }
 
     [Test]
@@ -193,25 +199,29 @@ public class AllScenarioBenchmarkMatrixTests
         UAVScenarioConfig config = AssetDatabase.LoadAssetAtPath<UAVScenarioConfig>("Assets/Scenarios/Scenario_DynamicThreats.asset");
         Assert.IsNotNull(config);
         Assert.IsTrue(config.enableDynamicObstacles);
-        Assert.AreEqual(3, config.dynamicObstacleCount);
+        Assert.AreEqual(2, config.dynamicObstacleCount);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
+            config.obstacleCount,
             config.seed,
-            config.enableVariableObstacleHeights,
-            config.minObstacleHeight,
-            config.maxObstacleHeight,
+            config.distributionMode,
+            config.corridorFocusWeight,
+            config.corridorWidth,
             config.enableDynamicObstacles,
             config.dynamicObstacleCount,
             config.dynamicObstacleSpeed,
-            config.dynamicObstacleMovementMode,
-            config.dynamicObstacleLoopMode);
+            ObstacleMovementMode.Patrol,
+            PatrolLoopMode.PingPong,
+            config.enableVariableObstacleHeights,
+            config.minObstacleHeight,
+            config.maxObstacleHeight).gameObject;
 
         DynamicObstacle[] dynamicObs = obstacleParentObj.GetComponentsInChildren<DynamicObstacle>();
-        Assert.AreEqual(3, dynamicObs.Length, "Must spawn exactly 3 dynamic obstacles!");
+        Assert.AreEqual(2, dynamicObs.Length, "Must spawn exactly 2 dynamic obstacles!");
 
         for (int i = 0; i < dynamicObs.Length; i++)
         {
@@ -227,11 +237,12 @@ public class AllScenarioBenchmarkMatrixTests
         Assert.IsNotNull(config);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
-            config.seed);
+            config.obstacleCount,
+            config.seed).gameObject;
 
         gridManager.CreateGrid();
         pathfinding.FindPath(config.startPosition, config.targetPosition);
@@ -249,19 +260,23 @@ public class AllScenarioBenchmarkMatrixTests
         Assert.IsTrue(config.enableDynamicObstacles);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
+            config.obstacleCount,
             config.seed,
-            config.enableVariableObstacleHeights,
-            config.minObstacleHeight,
-            config.maxObstacleHeight,
+            config.distributionMode,
+            config.corridorFocusWeight,
+            config.corridorWidth,
             config.enableDynamicObstacles,
             config.dynamicObstacleCount,
             config.dynamicObstacleSpeed,
-            config.dynamicObstacleMovementMode,
-            config.dynamicObstacleLoopMode);
+            ObstacleMovementMode.Patrol,
+            PatrolLoopMode.PingPong,
+            config.enableVariableObstacleHeights,
+            config.minObstacleHeight,
+            config.maxObstacleHeight).gameObject;
 
         DynamicObstacle[] dynamicObs = obstacleParentObj.GetComponentsInChildren<DynamicObstacle>();
         Assert.GreaterOrEqual(dynamicObs.Length, 1);
@@ -278,14 +293,23 @@ public class AllScenarioBenchmarkMatrixTests
         Assert.AreEqual(6.0f, config.maxFlightAltitude, 0.01f);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
+            config.obstacleCount,
             config.seed,
+            config.distributionMode,
+            config.corridorFocusWeight,
+            config.corridorWidth,
+            config.enableDynamicObstacles,
+            config.dynamicObstacleCount,
+            config.dynamicObstacleSpeed,
+            ObstacleMovementMode.Patrol,
+            PatrolLoopMode.PingPong,
             config.enableVariableObstacleHeights,
             config.minObstacleHeight,
-            config.maxObstacleHeight);
+            config.maxObstacleHeight).gameObject;
 
         for (int i = 0; i < obstacleParentObj.transform.childCount; i++)
         {
@@ -307,19 +331,23 @@ public class AllScenarioBenchmarkMatrixTests
         Assert.AreEqual(2, config.dynamicObstacleCount);
 
         obstacleParentObj = ProceduralObstacleGenerator.Generate(
-            config.obstacleCount,
+            gridManager.transform,
             gridManager.gridWorldSize,
             config.startPosition,
             config.targetPosition,
+            config.obstacleCount,
             config.seed,
-            config.enableVariableObstacleHeights,
-            config.minObstacleHeight,
-            config.maxObstacleHeight,
+            config.distributionMode,
+            config.corridorFocusWeight,
+            config.corridorWidth,
             config.enableDynamicObstacles,
             config.dynamicObstacleCount,
             config.dynamicObstacleSpeed,
-            config.dynamicObstacleMovementMode,
-            config.dynamicObstacleLoopMode);
+            ObstacleMovementMode.Patrol,
+            PatrolLoopMode.PingPong,
+            config.enableVariableObstacleHeights,
+            config.minObstacleHeight,
+            config.maxObstacleHeight).gameObject;
 
         DynamicObstacle[] dynamicObs = obstacleParentObj.GetComponentsInChildren<DynamicObstacle>();
         Assert.AreEqual(2, dynamicObs.Length);
@@ -334,22 +362,26 @@ public class AllScenarioBenchmarkMatrixTests
             UAVScenarioConfig config = AssetDatabase.LoadAssetAtPath<UAVScenarioConfig>(path);
             Assert.IsNotNull(config, $"Config null for '{path}'");
 
-            if (obstacleParentObj != null) Object.DestroyImmediate(obstacleParentObj);
+            if (obstacleParentObj != null) UnityEngine.Object.DestroyImmediate(obstacleParentObj);
 
             obstacleParentObj = ProceduralObstacleGenerator.Generate(
-                config.obstacleCount,
+                gridManager.transform,
                 gridManager.gridWorldSize,
                 config.startPosition,
                 config.targetPosition,
+                config.obstacleCount,
                 config.seed,
-                config.enableVariableObstacleHeights,
-                config.minObstacleHeight,
-                config.maxObstacleHeight,
+                config.distributionMode,
+                config.corridorFocusWeight,
+                config.corridorWidth,
                 config.enableDynamicObstacles,
                 config.dynamicObstacleCount,
                 config.dynamicObstacleSpeed,
-                config.dynamicObstacleMovementMode,
-                config.dynamicObstacleLoopMode);
+                ObstacleMovementMode.Patrol,
+                PatrolLoopMode.PingPong,
+                config.enableVariableObstacleHeights,
+                config.minObstacleHeight,
+                config.maxObstacleHeight).gameObject;
 
             gridManager.CreateGrid();
             pathfinding.FindPath(config.startPosition, config.targetPosition);

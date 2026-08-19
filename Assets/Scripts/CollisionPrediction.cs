@@ -253,7 +253,7 @@ public static class CollisionPrediction
                 float tEval = Mathf.Clamp(tCpa, t0, t1);
 
                 Vector3 relAtEval = r0 + vRel * tEval;
-                crossTrackDistance = relAtEval.magnitude;
+                crossTrackDistance = new Vector2(relAtEval.x, relAtEval.z).magnitude;
 
                 float distOnSeg = speed * (tEval - t0);
                 alongPathDistance = cumulativeDistance + distOnSeg;
@@ -265,26 +265,36 @@ public static class CollisionPrediction
             }
             else
             {
-                // Static obstacle: Geometric orthogonal projection onto line segment
-                Vector3 toObstacle = obstaclePos - segStart;
-                float projection = Vector3.Dot(toObstacle, segDir);
-                float clampedProj = Mathf.Clamp(projection, 0f, segLength);
+                // Static obstacle: Geometric orthogonal projection onto line segment on XZ horizontal plane
+                Vector2 obsFlat = new Vector2(obstaclePos.x, obstaclePos.z);
+                Vector2 segStartFlat = new Vector2(segStart.x, segStart.z);
+                Vector2 segEndFlat = new Vector2(segEnd.x, segEnd.z);
+                Vector2 segVecFlat = segEndFlat - segStartFlat;
+                float segLenFlat = segVecFlat.magnitude;
+                Vector2 segDirFlat = segLenFlat > 0.001f ? segVecFlat / segLenFlat : Vector2.zero;
 
-                closestPointOnSegment = segStart + segDir * clampedProj;
-                crossTrackDistance = Vector3.Distance(obstaclePos, closestPointOnSegment);
+                Vector2 toObsFlat = obsFlat - segStartFlat;
+                float projFlat = Vector2.Dot(toObsFlat, segDirFlat);
+                float clampedProjFlat = Mathf.Clamp(projFlat, 0f, segLenFlat);
+                float tSeg = segLenFlat > 0.001f ? clampedProjFlat / segLenFlat : 0f;
 
-                // If collider is available, also test collider's closest point to path segment
+                closestPointOnSegment = Vector3.Lerp(segStart, segEnd, tSeg);
+                Vector2 closestFlat = new Vector2(closestPointOnSegment.x, closestPointOnSegment.z);
+                crossTrackDistance = Vector2.Distance(obsFlat, closestFlat);
+
+                // If collider is available, test collider's closest point projected horizontally
                 if (obstacle.Collider != null)
                 {
                     Vector3 colliderClosest = obstacle.Collider.ClosestPoint(closestPointOnSegment);
-                    float colliderDistToPath = Vector3.Distance(colliderClosest, closestPointOnSegment);
-                    if (colliderDistToPath < crossTrackDistance)
+                    Vector2 colliderFlat = new Vector2(colliderClosest.x, colliderClosest.z);
+                    float colliderDistFlat = Vector2.Distance(colliderFlat, closestFlat);
+                    if (colliderDistFlat < crossTrackDistance)
                     {
-                        crossTrackDistance = colliderDistToPath;
+                        crossTrackDistance = colliderDistFlat;
                     }
                 }
 
-                alongPathDistance = cumulativeDistance + clampedProj;
+                alongPathDistance = cumulativeDistance + (tSeg * segLength);
                 verticalSeparation = closestPointOnSegment.y - obstacleTopY;
             }
 
@@ -296,7 +306,7 @@ public static class CollisionPrediction
 
             // Check if path segment physically breaches the safety envelope
             // A collision occurs ONLY IF horizontal cross-track is within safety radius AND vertical separation is below vertical safety margin
-            bool isVerticallySafe = verticalSeparation >= verticalSafetyMargin;
+            bool isVerticallySafe = verticalSeparation >= verticalSafetyMargin - 0.001f;
 
             if (!isVerticallySafe && crossTrackDistance <= safetyRadius && alongPathDistance <= maxLookaheadDistance)
             {

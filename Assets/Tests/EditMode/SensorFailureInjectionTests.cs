@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -140,15 +140,20 @@ public class SensorFailureInjectionTests
     public void SensorFailure_BaroLoss_ExpandsVerticalUncertainty()
     {
         // 1. Initial healthy state with Baro + GPS
-        gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, 0.0f);
-        baroSensor.UpdateFromSimulationState(0f, 0f, 0.0f);
+        for (int i = 0; i < 5; i++)
+        {
+            float t = i * 0.05f;
+            imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, t);
+            if (i % 2 == 0) gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, t);
+            baroSensor.UpdateFromSimulationState(0f, 0f, t);
+        }
 
         float nominalVertStdDev = ekfProvider.VerticalPositionStdDev;
 
         // 2. Inject Barometer failure (GPS continues, Baro ceases)
         failureInjector.InjectFailure(SensorType.Barometer);
 
-        for (int i = 1; i <= 30; i++)
+        for (int i = 5; i <= 35; i++)
         {
             float t = i * 0.05f;
             imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, t);
@@ -215,7 +220,7 @@ public class SensorFailureInjectionTests
         failureInjector.InjectFailure(SensorType.IMU);
         ekfProvider.CheckTimeouts(0.25f);
 
-        ThreatReport threat = new ThreatReport(ThreatLevel.Critical, DetectedObstacle.Empty, Vector3.forward * 3f, 3f, 1.0f, 0);
+        ThreatReport threat = new ThreatReport(ThreatLevel.Critical, default(DetectedObstacle), Vector3.forward * 3f, 3f, 1.0f, 0);
         bool replanResult = replanningController.TryExecuteReplan("Critical Threat with IMU Failure", threat);
 
         Assert.IsFalse(replanResult);
@@ -276,13 +281,19 @@ public class SensorFailureInjectionTests
     [Test]
     public void SensorFailure_UncertaintyAvoidance_ExpandsDynamicRadiiDuringFailure()
     {
-        gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, 0.0f);
+        // 1. Converge initial nominal state
+        for (int i = 0; i < 5; i++)
+        {
+            float t = i * 0.1f;
+            imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, t);
+            gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, t);
+        }
         float nominalSafetyRadius = threatAssessment.EffectiveSafetyRadius;
 
         failureInjector.InjectFailure(SensorType.GPS);
 
         // Propagate dead-reckoning
-        for (int i = 1; i <= 40; i++)
+        for (int i = 5; i <= 45; i++)
         {
             imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, i * 0.05f);
         }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -12,6 +12,8 @@ using UnityEngine;
 public class TrackManager : MonoBehaviour
 {
     public const int MaxTracks = 64;
+    public const int MaxSensors = 16;
+    public const int MaxBufferedDetections = 128;
 
     [Header("Lifecycle Thresholds")]
     [Tooltip("Number of required measurement hits in the last 5 scans to promote Tentative -> Confirmed.")]
@@ -22,6 +24,10 @@ public class TrackManager : MonoBehaviour
 
     [Tooltip("Maximum allowable time in seconds before permanently deleting a Lost track.")]
     [SerializeField] private float lostTimeoutSeconds = 2.0f;
+
+    [Header("Runtime Sensor Polling")]
+    [Tooltip("Automatically discover and poll attached ITargetSensor components during runtime Update.")]
+    [SerializeField] private bool autoPollSensors = true;
 
     // Internal Track Container Record
     public class TrackRecord
@@ -76,18 +82,56 @@ public class TrackManager : MonoBehaviour
 
     private readonly DataAssociation dataAssociation = new DataAssociation();
 
+    // Sensor Polling Buffers & State
+    private readonly ITargetSensor[] cachedSensors = new ITargetSensor[MaxSensors];
+    private int cachedSensorCount = 0;
+
+    private readonly TargetDetection[] sensorDetectionBuffer = new TargetDetection[MaxBufferedDetections];
+    private int pendingDetectionCount = 0;
+    private bool hasPendingScan = false;
+    private Action<TargetDetection[], int> onSensorDetectionsUpdatedHandler;
+
     private int activeTrackCount = 0;
     private int nextTrackId = 1;
     private float lastProcessTime = -1f;
 
     public int ActiveTrackCount => activeTrackCount;
     public int NextTrackId => nextTrackId;
+    public int SensorCount => cachedSensorCount;
+    public bool AutoPollSensors { get => autoPollSensors; set => autoPollSensors = value; }
 
     public event Action<TrackedTarget[], int> OnTracksUpdated;
 
     private void Awake()
     {
         InitializeManager();
+        InitializeSensors();
+    }
+
+    private void OnEnable()
+    {
+        SubscribeAllSensors();
+    }
+
+    private void OnDisable()
+    {
+        UnsubscribeAllSensors();
+    }
+
+    private void Start()
+    {
+        if (cachedSensorCount == 0)
+        {
+            DiscoverSensors();
+        }
+    }
+
+    private void Update()
+    {
+        if (autoPollSensors)
+        {
+            PollSensors(Time.time);
+        }
     }
 
     public void InitializeManager()
@@ -107,11 +151,250 @@ public class TrackManager : MonoBehaviour
         activeTrackCount = 0;
         nextTrackId = 1;
         lastProcessTime = -1f;
+        pendingDetectionCount = 0;
+        hasPendingScan = false;
+    }
+
+    public void InitializeSensors()
+    {
+        if (onSensorDetectionsUpdatedHandler == null)
+        {
+            onSensorDetectionsUpdatedHandler = HandleSensorDetectionsUpdated;
+        }
+        if (cachedSensorCount == 0)
+        {
+            DiscoverSensors();
+        }
     }
 
     public void Reset()
     {
         InitializeManager();
+    }
+
+    /// <summary>
+    /// Discovers and caches all ITargetSensor components attached to this GameObject and its children.
+    /// </summary>
+    public void DiscoverSensors()
+    {
+        UnsubscribeAllSensors();
+        cachedSensorCount = 0;
+
+        // 1. Search on this GameObject
+        ITargetSensor[] onSelf = GetComponents<ITargetSensor>();
+        if (onSelf != null)
+        {
+            for (int i = 0; i < onSelf.Length && cachedSensorCount < MaxSensors; i++)
+            {
+                if (onSelf[i] != null && !ContainsSensor(onSelf[i]))
+                {
+                    cachedSensors[cachedSensorCount++] = onSelf[i];
+                }
+            }
+        }
+
+        // 2. Search on child GameObjects
+        ITargetSensor[] onChildren = GetComponentsInChildren<ITargetSensor>();
+        if (onChildren != null)
+        {
+            for (int i = 0; i < onChildren.Length && cachedSensorCount < MaxSensors; i++)
+            {
+                if (onChildren[i] != null && !ContainsSensor(onChildren[i]))
+                {
+                    cachedSensors[cachedSensorCount++] = onChildren[i];
+                }
+            }
+        }
+
+        SortSensorsDeterministic();
+        SubscribeAllSensors();
+    }
+
+    /// <summary>
+    /// Manually registers an ITargetSensor with the manager.
+    /// </summary>
+    public bool RegisterSensor(ITargetSensor sensor)
+    {
+        if (sensor == null || cachedSensorCount >= MaxSensors || ContainsSensor(sensor))
+        {
+            return false;
+        }
+
+        if (onSensorDetectionsUpdatedHandler == null)
+        {
+            onSensorDetectionsUpdatedHandler = HandleSensorDetectionsUpdated;
+        }
+
+        cachedSensors[cachedSensorCount++] = sensor;
+        SortSensorsDeterministic();
+        sensor.OnDetectionsUpdated += onSensorDetectionsUpdatedHandler;
+        return true;
+    }
+
+    /// <summary>
+    /// Unregisters a previously registered ITargetSensor.
+    /// </summary>
+    public bool UnregisterSensor(ITargetSensor sensor)
+    {
+        if (sensor == null || cachedSensorCount == 0) return false;
+
+        int foundIdx = -1;
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            if (cachedSensors[i] == sensor)
+            {
+                foundIdx = i;
+                break;
+            }
+        }
+
+        if (foundIdx < 0) return false;
+
+        sensor.OnDetectionsUpdated -= onSensorDetectionsUpdatedHandler;
+
+        for (int i = foundIdx; i < cachedSensorCount - 1; i++)
+        {
+            cachedSensors[i] = cachedSensors[i + 1];
+        }
+        cachedSensors[cachedSensorCount - 1] = null;
+        cachedSensorCount--;
+        return true;
+    }
+
+    /// <summary>
+    /// Clears all cached sensors and unsubscribes from events.
+    /// </summary>
+    public void ClearSensors()
+    {
+        UnsubscribeAllSensors();
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            cachedSensors[i] = null;
+        }
+        cachedSensorCount = 0;
+        pendingDetectionCount = 0;
+        hasPendingScan = false;
+    }
+
+    public ITargetSensor GetSensor(int index)
+    {
+        if (index >= 0 && index < cachedSensorCount)
+        {
+            return cachedSensors[index];
+        }
+        return null;
+    }
+
+    private bool ContainsSensor(ITargetSensor sensor)
+    {
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            if (cachedSensors[i] == sensor) return true;
+        }
+        return false;
+    }
+
+    private void SubscribeAllSensors()
+    {
+        if (onSensorDetectionsUpdatedHandler == null)
+        {
+            onSensorDetectionsUpdatedHandler = HandleSensorDetectionsUpdated;
+        }
+
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            ITargetSensor sensor = cachedSensors[i];
+            if (sensor != null)
+            {
+                sensor.OnDetectionsUpdated -= onSensorDetectionsUpdatedHandler;
+                sensor.OnDetectionsUpdated += onSensorDetectionsUpdatedHandler;
+            }
+        }
+    }
+
+    private void UnsubscribeAllSensors()
+    {
+        if (onSensorDetectionsUpdatedHandler == null) return;
+
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            ITargetSensor sensor = cachedSensors[i];
+            if (sensor != null)
+            {
+                sensor.OnDetectionsUpdated -= onSensorDetectionsUpdatedHandler;
+            }
+        }
+    }
+
+    private void SortSensorsDeterministic()
+    {
+        for (int i = 0; i < cachedSensorCount - 1; i++)
+        {
+            for (int j = i + 1; j < cachedSensorCount; j++)
+            {
+                ITargetSensor a = cachedSensors[i];
+                ITargetSensor b = cachedSensors[j];
+                if (a == null || b == null) continue;
+
+                int comp = a.Modality.CompareTo(b.Modality);
+                if (comp == 0)
+                {
+                    int idA = (a is Component compA) ? compA.GetInstanceID() : 0;
+                    int idB = (b is Component compB) ? compB.GetInstanceID() : 0;
+                    comp = idA.CompareTo(idB);
+                }
+
+                if (comp > 0)
+                {
+                    cachedSensors[i] = b;
+                    cachedSensors[j] = a;
+                }
+            }
+        }
+    }
+
+    private void HandleSensorDetectionsUpdated(TargetDetection[] detections, int count)
+    {
+        hasPendingScan = true;
+        for (int i = 0; i < count && pendingDetectionCount < MaxBufferedDetections; i++)
+        {
+            sensorDetectionBuffer[pendingDetectionCount++] = detections[i];
+        }
+    }
+
+    /// <summary>
+    /// Polls all configured sensors at the specified timestamp, aggregates detections into
+    /// a preallocated combined buffer, and invokes ProcessDetections if any sensor performed a scan.
+    /// Zero steady-state heap allocations.
+    /// </summary>
+    public void PollSensors(float currentTime)
+    {
+        if (cachedSensorCount == 0) return;
+
+        // 1. Evaluate any sensor that has not yet evaluated at currentTime
+        for (int i = 0; i < cachedSensorCount; i++)
+        {
+            ITargetSensor sensor = cachedSensors[i];
+            if (sensor == null || !sensor.IsActive || sensor.Health == SensorHealth.Failed || sensor.Health == SensorHealth.Timeout)
+            {
+                continue;
+            }
+
+            sensor.Evaluate(currentTime);
+        }
+
+        // 2. If any sensor performed a scan (captured via event or pending flag), process the batch
+        if (hasPendingScan)
+        {
+            ProcessDetections(sensorDetectionBuffer, pendingDetectionCount, currentTime);
+            pendingDetectionCount = 0;
+            hasPendingScan = false;
+        }
+    }
+
+    public void PollSensors()
+    {
+        PollSensors(Time.time);
     }
 
     /// <summary>
@@ -198,7 +481,14 @@ public class TrackManager : MonoBehaviour
                 }
                 else if (track.Status == TrackStatus.Confirmed)
                 {
-                    track.Status = TrackStatus.Coasting;
+                    if (timeSinceUpdate > coastingTimeoutSeconds)
+                    {
+                        track.Status = TrackStatus.Lost;
+                    }
+                    else
+                    {
+                        track.Status = TrackStatus.Coasting;
+                    }
                 }
                 else if (track.Status == TrackStatus.Coasting)
                 {

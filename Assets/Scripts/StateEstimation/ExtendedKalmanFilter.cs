@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -30,6 +30,7 @@ public class ExtendedKalmanFilter
     private Matrix11x11 processNoiseQ = Matrix11x11.Zero;
 
     private float lastPredictionTime = -1.0f;
+    private bool hasPredictionTimestamp = false;
     private EstimatorStatus status = EstimatorStatus.Uninitialized;
     private GpsFixState gpsState = GpsFixState.NoFix;
 
@@ -107,6 +108,7 @@ public class ExtendedKalmanFilter
         covariance[10, 10] = 0.0025f; // (0.05 rad/s)^2 initial gyro bias uncertainty
 
         lastPredictionTime = timestamp;
+        hasPredictionTimestamp = true;
         status = EstimatorStatus.Nominal;
         gpsState = GpsFixState.Fix3D;
         acceptedMeasurements = 0;
@@ -123,6 +125,7 @@ public class ExtendedKalmanFilter
         covariance = Matrix11x11.Identity;
         for (int i = 0; i < 11; i++) covariance[i, i] = 9999f;
         lastPredictionTime = -1f;
+        hasPredictionTimestamp = false;
         status = EstimatorStatus.Uninitialized;
         gpsState = GpsFixState.NoFix;
         acceptedMeasurements = 0;
@@ -150,8 +153,9 @@ public class ExtendedKalmanFilter
             return true;
         }
 
-        float dt = (lastPredictionTime > 0f) ? (currentTime - lastPredictionTime) : 0.01f;
+        float dt = hasPredictionTimestamp ? (currentTime - lastPredictionTime) : 0.01f;
         lastPredictionTime = currentTime;
+        hasPredictionTimestamp = true;
 
         if (dt <= 0.0001f || dt > 1.0f)
         {
@@ -288,7 +292,7 @@ public class ExtendedKalmanFilter
             CorrectScalar(6, courseYaw, courseVar, isAngle: true);
         }
 
-        if (pxOk || pyOk || pzOk || vxOk || vyOk || vzOk)
+        if (pxOk && pyOk && pzOk && vxOk && vyOk && vzOk)
         {
             if (status == EstimatorStatus.Degraded)
             {

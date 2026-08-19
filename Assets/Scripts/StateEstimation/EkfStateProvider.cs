@@ -16,6 +16,9 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
     private float lastPredictionTime = -1f;
     private float lastGpsCorrectionTime = -1f;
     private float lastBaroCorrectionTime = -1f;
+    private bool hasReceivedImu = false;
+    private bool hasReceivedGps = false;
+    private bool hasReceivedBaro = false;
 
     [Header("Watchdog Timeout Thresholds (Seconds)")]
     [Tooltip("Maximum allowable time without GPS updates before marking fix lost (default 0.50s = 5 missed frames @ 10Hz).")]
@@ -75,6 +78,12 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
         if (gpsSensor == null) gpsSensor = GetComponent<IGpsSensor>();
         if (imuSensor == null) imuSensor = GetComponent<IImuSensor>();
         if (baroSensor == null) baroSensor = GetComponent<IAltimeterSensor>();
+        hasReceivedImu = false;
+        hasReceivedGps = false;
+        hasReceivedBaro = false;
+        lastPredictionTime = -1f;
+        lastGpsCorrectionTime = -1f;
+        lastBaroCorrectionTime = -1f;
     }
 
     private void OnEnable()
@@ -111,6 +120,7 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
     public void HandleImuUpdated(ImuMeasurement imu)
     {
         if (ekf == null) return;
+        hasReceivedImu = true;
         lastPredictionTime = imu.Timestamp;
         ekf.Predict(imu, imu.Timestamp);
         PublishState(imu.Timestamp);
@@ -119,6 +129,7 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
     public void HandleGpsUpdated(GpsMeasurement gps)
     {
         if (ekf == null) return;
+        hasReceivedGps = true;
         lastGpsCorrectionTime = gps.Timestamp;
         ekf.CorrectGps(gps);
         PublishState(gps.Timestamp);
@@ -127,6 +138,7 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
     public void HandleBaroUpdated(AltimeterMeasurement baro)
     {
         if (ekf == null) return;
+        hasReceivedBaro = true;
         lastBaroCorrectionTime = baro.Timestamp;
         ekf.CorrectBaro(baro);
         PublishState(baro.Timestamp);
@@ -144,25 +156,20 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
         if (ekf.IsInitialized)
         {
             // 1. IMU Watchdog: If IMU packets cease for > imuTimeoutThreshold, strapdown integration is impossible
-            if (lastPredictionTime > 0f && (timestamp - lastPredictionTime > imuTimeoutThreshold + 0.0001f))
+            if (hasReceivedImu && (timestamp - lastPredictionTime > imuTimeoutThreshold + 0.0001f))
             {
                 effectiveStatus = EstimatorStatus.Failed;
             }
             // 2. GPS Watchdog: If GPS packets cease for > gpsTimeoutThreshold, GNSS lock is lost
-            else if (lastGpsCorrectionTime > 0f && (timestamp - lastGpsCorrectionTime > gpsTimeoutThreshold + 0.0001f))
+            else if (hasReceivedGps && (timestamp - lastGpsCorrectionTime > gpsTimeoutThreshold + 0.0001f))
             {
                 effectiveGps = GpsFixState.NoFix;
-
-                // If position uncertainty has grown past threshold, transition to Degraded
-                if (baseState.HorizontalPositionStandardDeviation > 0.35f)
-                {
-                    effectiveStatus = EstimatorStatus.Degraded;
-                }
-            }
-            // 3. Covariance-driven degradation
-            else if (baseState.HorizontalPositionStandardDeviation > 0.40f)
-            {
                 effectiveStatus = EstimatorStatus.Degraded;
+            }
+            // 3. Healthy GPS status maintenance
+            else if (hasReceivedGps && effectiveGps != GpsFixState.NoFix)
+            {
+                effectiveStatus = EstimatorStatus.Nominal;
             }
         }
 

@@ -73,8 +73,8 @@ public class MultiThreatTelemetryReportingTests
         // Populate 2 active threats in ThreatAssessment
         List<ThreatReport> threats = new List<ThreatReport>
         {
-            new ThreatReport(ThreatLevel.Critical, default, new Vector3(0f, 1f, 4f), 4f, 2f, 0),
-            new ThreatReport(ThreatLevel.Warning, default, new Vector3(2f, 1f, 8f), 8f, 4f, 0)
+            new ThreatReport(ThreatLevel.Critical, default(DetectedObstacle), new Vector3(0f, 1f, 4f), 4f, 2f, 0),
+            new ThreatReport(ThreatLevel.Warning, default(DetectedObstacle), new Vector3(2f, 1f, 8f), 8f, 4f, 0)
         };
         FieldInfo activeThreatsField = typeof(ThreatAssessment).GetField("activeThreatReports", BindingFlags.NonPublic | BindingFlags.Instance);
         activeThreatsField?.SetValue(threatAssessment, threats);
@@ -120,7 +120,7 @@ public class MultiThreatTelemetryReportingTests
         Text textComponent = telemetryTextField?.GetValue(tacticalHud) as Text;
 
         Assert.IsNotNull(textComponent);
-        Assert.IsTrue(textComponent.text.Contains("Pacing: 2 | Spatial: 3"), "HUD must display pacing vs spatial replan breakdown!");
+        Assert.IsTrue(textComponent.text.Contains("Pacing: 2") && textComponent.text.Contains("Spatial: 3"), "HUD must display pacing vs spatial replan breakdown!");
     }
 
     [Test]

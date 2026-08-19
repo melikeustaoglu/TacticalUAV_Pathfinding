@@ -36,6 +36,8 @@ public class ThreeDimensionalScenarioIntegrationTests
         threatAssessment = uavObj.AddComponent<ThreatAssessment>();
         replanningController = uavObj.AddComponent<ReplanningController>();
 
+        uavPerception.ObstacleMask = gridManager.obstacleMask;
+
         typeof(PathFollower).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(pathFollower, null);
         typeof(UAVPerception).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(uavPerception, null);
         typeof(ThreatAssessment).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(threatAssessment, null);
@@ -151,22 +153,23 @@ public class ThreeDimensionalScenarioIntegrationTests
         };
         pathFollower.StartFollowing(flightPath);
 
-        // 2. Spawn actual dynamic obstacle on Obstacle layer crossing the corridor at Z = 8m
+        // 2. Spawn actual dynamic obstacle on Obstacle layer crossing the corridor at Z = 5m
         obstacleParentObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacleParentObj.name = "DynamicObstacle_E2E";
         obstacleParentObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
-        obstacleParentObj.transform.position = new Vector3(-2f, 1f, 8f);
+        obstacleParentObj.transform.position = new Vector3(-5f, 1f, 5f);
         obstacleParentObj.transform.localScale = Vector3.one * 1.5f;
 
         DynamicObstacle dynComp = obstacleParentObj.AddComponent<DynamicObstacle>();
         dynComp.Speed = 1.5f;
-        dynComp.MovementMode = ObstacleMovementMode.Linear;
+        dynComp.MovementMode = ObstacleMovementMode.Patrol;
         dynComp.MovementEnabled = true;
-        dynComp.Initialize(new List<Vector3>
+        dynComp.SetPatrolWaypoints(new List<Vector3>
         {
-            new Vector3(-2f, 1f, 8f),
-            new Vector3(4f, 1f, 8f)
+            new Vector3(-5f, 1f, 5f),
+            new Vector3(5f, 1f, 5f)
         });
+        dynComp.Step(0.02f);
 
         Physics.SyncTransforms();
 
@@ -203,7 +206,7 @@ public class ThreeDimensionalScenarioIntegrationTests
         obstacleParentObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacleParentObj.name = "LowStaticObstacle_E2E";
         obstacleParentObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
-        obstacleParentObj.transform.position = new Vector3(0f, 1.0f, 8f);
+        obstacleParentObj.transform.position = new Vector3(0f, 1.0f, 5f);
         obstacleParentObj.transform.localScale = new Vector3(2f, 2.0f, 2f);
 
         BoxCollider col = obstacleParentObj.GetComponent<BoxCollider>();

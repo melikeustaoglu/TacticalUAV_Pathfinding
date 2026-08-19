@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -214,7 +214,7 @@ public class UncertaintyAwareTacticalAvoidanceTests
         mockStateProvider.SetMockState(state);
 
         pathFollower.StartFollowing(new List<Node> { new Node(true, new Vector3(0f, 1f, 10f), 0, 0) });
-        ThreatReport threat = new ThreatReport(ThreatLevel.Critical, DetectedObstacle.Empty, Vector3.forward * 3f, 3f, 1.5f, 0);
+        ThreatReport threat = new ThreatReport(ThreatLevel.Critical, default(DetectedObstacle), Vector3.forward * 3f, 3f, 1.5f, 0);
 
         bool result = replanningController.TryExecuteReplan("Critical Threat with Failed Estimator", threat);
 

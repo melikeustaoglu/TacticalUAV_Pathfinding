@@ -215,7 +215,10 @@ public class MultiThreatOrchestrationTests
 
         GameObject headOnObs = new GameObject("HeadOnObs");
         headOnObs.transform.position = new Vector3(0f, 1f, 10f);
-        DetectedObstacle det = new DetectedObstacle(headOnObs, null, headOnObs.transform.position, headOnObs.transform.position, Vector3.forward, 10f, 0f, Vector3.back, new Vector3(0f, 0f, -2f), true);
+        BoxCollider col = headOnObs.AddComponent<BoxCollider>();
+        col.size = new Vector3(2f, 12f, 2f);
+        col.center = new Vector3(0f, 5f, 0f);
+        DetectedObstacle det = new DetectedObstacle(headOnObs, col, headOnObs.transform.position, headOnObs.transform.position, Vector3.forward, 10f, 0f, Vector3.back, new Vector3(0f, 0f, -2f), true);
         ThreatReport rep = new ThreatReport(ThreatLevel.Critical, det, new Vector3(0f, 1f, 5f), 5f, 2.5f, 0);
 
         bool result = replanningController.TryExecuteReplan("VO Failure Spatial Replan", rep);

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -148,15 +148,16 @@ public class UncertaintyAwareNavigationTests
         pathFollower.SetTargetAltitude(3.0f);
         replanningController.NominalAltitude = 1.0f;
 
-        // Low vertical uncertainty (sigma_vert = 0.10m), but high horizontal uncertainty causing Degraded status
-        float horizVar = 0.80f * 0.80f;
-        float vertVar = 0.10f * 0.10f;
-        ekfProvider.EkfCore.Initialize(
-            Vector3.zero, Vector3.zero, 0f,
-            new Vector3(horizVar, vertVar, horizVar),
-            Vector3.one * 0.01f, 0.01f, 0f);
+        // 1. Initial healthy state
+        gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, 0.0f);
+        baroSensor.UpdateFromSimulationState(0f, 0f, 0.0f);
+        imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, 0.0f);
 
-        ekfProvider.PublishState(0.01f);
+        // 2. Inject GPS failure and advance time past GPS timeout threshold (0.5s) with continuous IMU -> Degraded status
+        failureInjector.InjectFailure(SensorType.GPS);
+        imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, 0.60f);
+        ekfProvider.CheckTimeouts(0.60f);
+
         Assert.AreEqual(EstimatorStatus.Degraded, ekfProvider.Status);
 
         replanningController.RecoverNominalAltitude();
@@ -203,13 +204,18 @@ public class UncertaintyAwareNavigationTests
     [Test]
     public void UncertaintyNav_GpsRecovery_RestoresFullCruiseSpeedAndTtc()
     {
-        // 1. Initial healthy state
-        gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, 0.0f);
+        // 1. Initial converged healthy state (25 updates)
+        for (int i = 0; i < 25; i++)
+        {
+            float t = i * 0.05f;
+            imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, t);
+            gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, t);
+        }
         Assert.AreEqual(1.0f, replanningController.EffectiveCruiseSpeedScale, 0.05f);
 
         // 2. Outage causing uncertainty growth
         failureInjector.InjectFailure(SensorType.GPS);
-        for (int i = 1; i <= 60; i++)
+        for (int i = 25; i <= 85; i++)
         {
             imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, i * 0.02f);
         }
@@ -219,11 +225,11 @@ public class UncertaintyAwareNavigationTests
 
         // 3. Recovery
         failureInjector.RecoverSensor(SensorType.GPS);
-        for (int i = 61; i <= 80; i++)
+        for (int i = 86; i <= 115; i++)
         {
-            float t = i * 0.02f;
+            float t = i * 0.05f;
             imuSensor.UpdateFromKinematics(Vector3.zero, Vector3.zero, Quaternion.identity, t);
-            if (i % 5 == 0) gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, t);
+            gpsSensor.UpdateFromSimulationState(Vector3.zero, Vector3.zero, t);
         }
 
         Assert.AreEqual(1.0f, replanningController.EffectiveCruiseSpeedScale, 0.05f);

@@ -35,6 +35,8 @@ public class ThreeDimensionalTelemetryReportingTests
         threatAssessment = uavObj.AddComponent<ThreatAssessment>();
         replanningController = uavObj.AddComponent<ReplanningController>();
 
+        uavPerception.ObstacleMask = gridManager.obstacleMask;
+
         typeof(PathFollower).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(pathFollower, null);
         typeof(UAVPerception).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(uavPerception, null);
         typeof(ThreatAssessment).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(threatAssessment, null);
@@ -77,18 +79,19 @@ public class ThreeDimensionalTelemetryReportingTests
         obstacleObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacleObj.name = "DynamicThreat_Telemetry";
         obstacleObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
-        obstacleObj.transform.position = new Vector3(-2f, 1f, 8f);
+        obstacleObj.transform.position = new Vector3(-5f, 1f, 5f);
         obstacleObj.transform.localScale = Vector3.one * 1.5f;
 
         DynamicObstacle dynComp = obstacleObj.AddComponent<DynamicObstacle>();
         dynComp.Speed = 1.5f;
-        dynComp.MovementMode = ObstacleMovementMode.Linear;
+        dynComp.MovementMode = ObstacleMovementMode.Patrol;
         dynComp.MovementEnabled = true;
-        dynComp.Initialize(new List<Vector3>
+        dynComp.SetPatrolWaypoints(new List<Vector3>
         {
-            new Vector3(-2f, 1f, 8f),
-            new Vector3(4f, 1f, 8f)
+            new Vector3(-5f, 1f, 5f),
+            new Vector3(5f, 1f, 5f)
         });
+        dynComp.Step(0.02f);
 
         Physics.SyncTransforms();
 
@@ -128,7 +131,7 @@ public class ThreeDimensionalTelemetryReportingTests
         obstacleObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacleObj.name = "StaticObs_Telemetry";
         obstacleObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
-        obstacleObj.transform.position = new Vector3(0f, 1.0f, 8f);
+        obstacleObj.transform.position = new Vector3(0f, 1.0f, 5f);
         obstacleObj.transform.localScale = new Vector3(2f, 2.0f, 2f);
 
         BoxCollider col = obstacleObj.GetComponent<BoxCollider>();
@@ -172,7 +175,7 @@ public class ThreeDimensionalTelemetryReportingTests
         obstacleObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacleObj.name = "StaticObs_EventLogger";
         obstacleObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
-        obstacleObj.transform.position = new Vector3(0f, 1.0f, 8f);
+        obstacleObj.transform.position = new Vector3(0f, 1.0f, 5f);
         obstacleObj.transform.localScale = new Vector3(2f, 2.0f, 2f);
 
         Physics.SyncTransforms();

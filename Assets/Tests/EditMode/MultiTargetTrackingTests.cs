@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -25,7 +25,7 @@ public class MultiTargetTrackingTests
     [TearDown]
     public void TearDown()
     {
-        if (trackerObj != null) Object.DestroyImmediate(trackerObj);
+        if (trackerObj != null) UnityEngine.Object.DestroyImmediate(trackerObj);
     }
 
     [Test]
@@ -242,11 +242,14 @@ public class MultiTargetTrackingTests
     public void MTT_MahalanobisGating_RejectsSpuriousOutlierDetections()
     {
         Vector3 pos = new Vector3(0f, 0f, 5f);
-        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.LiDAR, 0.0f, pos, Vector3.one * 0.04f, 0.95f, 1) }, 1, 0.0f);
+        // 3 consecutive scans confirm Track 1
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.LiDAR, 0.00f, pos, Vector3.one * 0.04f, 0.95f, 1) }, 1, 0.00f);
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.LiDAR, 0.05f, pos, Vector3.one * 0.04f, 0.95f, 1) }, 1, 0.05f);
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.LiDAR, 0.10f, pos, Vector3.one * 0.04f, 0.95f, 1) }, 1, 0.10f);
 
         // Distant spurious outlier at (50, 50, 50)
-        TargetDetection outlier = new TargetDetection(TargetSensorModality.LiDAR, 0.05f, new Vector3(50f, 50f, 50f), Vector3.one * 0.04f, 0.95f, 2);
-        trackManager.ProcessDetections(new TargetDetection[] { outlier }, 1, 0.05f);
+        TargetDetection outlier = new TargetDetection(TargetSensorModality.LiDAR, 0.15f, new Vector3(50f, 50f, 50f), Vector3.one * 0.04f, 0.95f, 2);
+        trackManager.ProcessDetections(new TargetDetection[] { outlier }, 1, 0.15f);
 
         // Track 1 should be unmatched (Coasting) and Outlier spawns new tentative Track 2
         TrackManager.TrackRecord track1 = trackManager.GetTrack(1);
