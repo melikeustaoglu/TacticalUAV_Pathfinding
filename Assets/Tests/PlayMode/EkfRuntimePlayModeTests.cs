@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEngine;
@@ -35,11 +35,19 @@ public class EkfRuntimePlayModeTests
         StateEstimationDiagnostics diag = uavObj.GetComponent<StateEstimationDiagnostics>();
         PathFollower pf = uavObj.GetComponent<PathFollower>();
 
+        SimulatedLidarSensor lidar = uavObj.GetComponent<SimulatedLidarSensor>();
+        SimulatedRadarSensor radar = uavObj.GetComponent<SimulatedRadarSensor>();
+        TrackManager trackManager = uavObj.GetComponent<TrackManager>();
+
         Assert.IsNotNull(gps, "UAV must be equipped with SimulatedGpsSensor!");
         Assert.IsNotNull(imu, "UAV must be equipped with SimulatedImuSensor!");
         Assert.IsNotNull(baro, "UAV must be equipped with SimulatedBaroAltimeter!");
+        Assert.IsNotNull(lidar, "UAV must be equipped with SimulatedLidarSensor!");
+        Assert.IsNotNull(radar, "UAV must be equipped with SimulatedRadarSensor!");
+        Assert.IsNotNull(trackManager, "UAV must be equipped with TrackManager!");
         Assert.IsNotNull(ekf, "UAV must be equipped with EkfStateProvider!");
         Assert.IsNull(uavObj.GetComponent<GroundTruthStateProvider>(), "GroundTruthStateProvider must NOT be on runtime UAV!");
+        Assert.AreEqual(2, trackManager.SensorCount, "TrackManager must discover both LiDAR and Radar sensors!");
 
         // Run simulation for 0.4 seconds across Unity frames
         yield return new WaitForSeconds(0.4f);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -244,10 +244,20 @@ public class ThreatAssessment : MonoBehaviour
 
     private void Awake()
     {
-        perception = GetComponent<UAVPerception>();
-        pathFollower = GetComponent<PathFollower>();
-        trackManager = GetComponent<TrackManager>();
-        stateProvider = GetComponent<IEstimatedStateProvider>();
+        AcquireReferences();
+    }
+
+    private void Start()
+    {
+        AcquireReferences();
+    }
+
+    private void AcquireReferences()
+    {
+        if (perception == null) perception = GetComponent<UAVPerception>();
+        if (pathFollower == null) pathFollower = GetComponent<PathFollower>();
+        if (trackManager == null) trackManager = GetComponent<TrackManager>();
+        if (stateProvider == null) stateProvider = GetComponent<IEstimatedStateProvider>();
     }
 
     private void Update()
@@ -260,6 +270,11 @@ public class ThreatAssessment : MonoBehaviour
     /// </summary>
     public void EvaluateThreats()
     {
+        if (trackManager == null || pathFollower == null)
+        {
+            AcquireReferences();
+        }
+
         // 1. Prefer Multi-Target TrackManager if attached and active
         if (trackManager != null && trackManager.ActiveTrackCount > 0)
         {

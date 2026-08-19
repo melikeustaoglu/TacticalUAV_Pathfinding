@@ -29,11 +29,25 @@ public static class GameManagerBootstrapper
         uavObject.layer = LayerMask.NameToLayer("Default");
 
         ApplyBrightMaterial(uavObject);
+
+        // Core Sensors & State Estimation
         uavObject.AddComponent<SimulatedGpsSensor>();
         uavObject.AddComponent<SimulatedImuSensor>();
         uavObject.AddComponent<SimulatedBaroAltimeter>();
         uavObject.AddComponent<EkfStateProvider>();
         uavObject.AddComponent<StateEstimationDiagnostics>();
+
+        // Multi-Sensor Target Tracking (LiDAR + Radar + TrackManager)
+        SimulatedLidarSensor lidar = uavObject.AddComponent<SimulatedLidarSensor>();
+        lidar.TargetMask = ProceduralObstacleGenerator.GetObstacleMask();
+
+        SimulatedRadarSensor radar = uavObject.AddComponent<SimulatedRadarSensor>();
+        radar.TargetMask = ProceduralObstacleGenerator.GetObstacleMask();
+
+        TrackManager trackManager = uavObject.AddComponent<TrackManager>();
+        trackManager.DiscoverSensors();
+
+        // Navigation, Perception & Tactical Autonomy
         uavObject.AddComponent<PathFollower>();
         uavObject.AddComponent<UAVPerception>();
         uavObject.AddComponent<ThreatAssessment>();

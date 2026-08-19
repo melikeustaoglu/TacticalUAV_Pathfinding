@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
@@ -217,5 +217,98 @@ public class EstimatedStateArchitectureTests
         Assert.AreEqual(9f, fallbackPos.z, 0.01f);
 
         Object.DestroyImmediate(rawUav);
+    }
+
+    [Test]
+    public void GameManagerBootstrapper_CreateUav_EquipsCompleteSensorAndTrackingStack()
+    {
+        Vector3 spawnPos = new Vector3(15f, 2f, 25f);
+        GameObject runtimeUav = GameManagerBootstrapper.CreateUav(spawnPos);
+
+        // Core Sensors
+        SimulatedGpsSensor gps = runtimeUav.GetComponent<SimulatedGpsSensor>();
+        SimulatedImuSensor imu = runtimeUav.GetComponent<SimulatedImuSensor>();
+        SimulatedBaroAltimeter baro = runtimeUav.GetComponent<SimulatedBaroAltimeter>();
+        SimulatedLidarSensor lidar = runtimeUav.GetComponent<SimulatedLidarSensor>();
+        SimulatedRadarSensor radar = runtimeUav.GetComponent<SimulatedRadarSensor>();
+
+        // State Estimation & Diagnostics
+        EkfStateProvider ekf = runtimeUav.GetComponent<EkfStateProvider>();
+        StateEstimationDiagnostics diag = runtimeUav.GetComponent<StateEstimationDiagnostics>();
+
+        // Target Tracking
+        TrackManager trackManager = runtimeUav.GetComponent<TrackManager>();
+
+        // Tactical Autonomy & Mission
+        PathFollower pf = runtimeUav.GetComponent<PathFollower>();
+        UAVPerception perception = runtimeUav.GetComponent<UAVPerception>();
+        ThreatAssessment threat = runtimeUav.GetComponent<ThreatAssessment>();
+        ReplanningController replanning = runtimeUav.GetComponent<ReplanningController>();
+        MissionManager mission = runtimeUav.GetComponent<MissionManager>();
+        TacticalHUD hud = runtimeUav.GetComponent<TacticalHUD>();
+        MissionEventLogger logger = runtimeUav.GetComponent<MissionEventLogger>();
+        BenchmarkReporter reporter = runtimeUav.GetComponent<BenchmarkReporter>();
+
+        Assert.IsNotNull(gps, "Runtime UAV must be equipped with SimulatedGpsSensor!");
+        Assert.IsNotNull(imu, "Runtime UAV must be equipped with SimulatedImuSensor!");
+        Assert.IsNotNull(baro, "Runtime UAV must be equipped with SimulatedBaroAltimeter!");
+        Assert.IsNotNull(lidar, "Runtime UAV must be equipped with SimulatedLidarSensor!");
+        Assert.IsNotNull(radar, "Runtime UAV must be equipped with SimulatedRadarSensor!");
+        Assert.IsNotNull(ekf, "Runtime UAV must be equipped with EkfStateProvider!");
+        Assert.IsNotNull(diag, "Runtime UAV must be equipped with StateEstimationDiagnostics!");
+        Assert.IsNotNull(trackManager, "Runtime UAV must be equipped with TrackManager!");
+        Assert.IsNotNull(pf, "Runtime UAV must be equipped with PathFollower!");
+        Assert.IsNotNull(perception, "Runtime UAV must be equipped with UAVPerception!");
+        Assert.IsNotNull(threat, "Runtime UAV must be equipped with ThreatAssessment!");
+        Assert.IsNotNull(replanning, "Runtime UAV must be equipped with ReplanningController!");
+        Assert.IsNotNull(mission, "Runtime UAV must be equipped with MissionManager!");
+        Assert.IsNotNull(hud, "Runtime UAV must be equipped with TacticalHUD!");
+        Assert.IsNotNull(logger, "Runtime UAV must be equipped with MissionEventLogger!");
+        Assert.IsNotNull(reporter, "Runtime UAV must be equipped with BenchmarkReporter!");
+
+        // Verify sensor masks
+        LayerMask expectedMask = ProceduralObstacleGenerator.GetObstacleMask();
+        Assert.AreEqual(expectedMask.value, lidar.TargetMask.value, "LiDAR target mask must match obstacle mask!");
+        Assert.AreEqual(expectedMask.value, radar.TargetMask.value, "Radar target mask must match obstacle mask!");
+
+        // Verify TrackManager discovered and registered both tracking sensors
+        Assert.AreEqual(2, trackManager.SensorCount, "TrackManager must discover both LiDAR and Radar sensors on the UAV!");
+
+        Object.DestroyImmediate(runtimeUav);
+    }
+
+    [Test]
+    public void GameManagerBootstrapper_CreateUav_WiredTrackManager_FeedsThreatAssessment()
+    {
+        Vector3 spawnPos = new Vector3(0f, 1f, 0f);
+        GameObject runtimeUav = GameManagerBootstrapper.CreateUav(spawnPos);
+
+        TrackManager trackManager = runtimeUav.GetComponent<TrackManager>();
+        ThreatAssessment threat = runtimeUav.GetComponent<ThreatAssessment>();
+        PathFollower pf = runtimeUav.GetComponent<PathFollower>();
+
+        // Set path for ThreatAssessment trajectory lookup
+        pf.StartFollowing(new List<Node>
+        {
+            new Node(true, new Vector3(0f, 1f, 5f), 0, 0),
+            new Node(true, new Vector3(0f, 1f, 15f), 0, 1)
+        });
+
+        // 3 consecutive radar hits confirming an approaching target in front of UAV at 4m
+        Vector3 targetPos = new Vector3(0f, 1f, 4f);
+        Vector3 targetVel = new Vector3(0f, 0f, -2.0f);
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.Radar, 0.00f, targetPos, Vector3.one * 0.04f, 0.95f, 1, targetVel, Vector3.one * 0.04f, true) }, 1, 0.00f);
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.Radar, 0.05f, targetPos, Vector3.one * 0.04f, 0.95f, 1, targetVel, Vector3.one * 0.04f, true) }, 1, 0.05f);
+        trackManager.ProcessDetections(new TargetDetection[] { new TargetDetection(TargetSensorModality.Radar, 0.10f, targetPos, Vector3.one * 0.04f, 0.95f, 1, targetVel, Vector3.one * 0.04f, true) }, 1, 0.10f);
+
+        Assert.AreEqual(1, trackManager.ActiveTrackCount);
+
+        // Evaluate threat assessment consuming TrackManager
+        threat.EvaluateThreats();
+
+        Assert.AreNotEqual(ThreatLevel.None, threat.CurrentThreatLevel, "ThreatAssessment must detect the confirmed tracked target!");
+        Assert.IsTrue(threat.CurrentThreatReport.HasTrack, "ThreatReport must contain valid track reference!");
+
+        Object.DestroyImmediate(runtimeUav);
     }
 }
