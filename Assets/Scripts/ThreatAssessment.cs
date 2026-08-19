@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -15,12 +15,15 @@ public enum ThreatLevel
 
 /// <summary>
 /// Structured telemetry report containing detailed threat and collision forecast data.
+/// Supports both legacy DetectedObstacle and multi-target TrackedTarget contracts.
 /// </summary>
 [Serializable]
 public struct ThreatReport
 {
     public ThreatLevel ThreatLevel { get; }
     public DetectedObstacle ThreateningObstacle { get; }
+    public TrackedTarget ThreateningTrack { get; }
+    public bool HasTrack => ThreateningTrack.IsValid;
     public Vector3 EstimatedCollisionPoint { get; }
     public float DistanceToCollision { get; }
     public float TimeToCollision { get; }
@@ -36,6 +39,34 @@ public struct ThreatReport
     {
         ThreatLevel = threatLevel;
         ThreateningObstacle = threateningObstacle;
+        ThreateningTrack = TrackedTarget.Empty;
+        EstimatedCollisionPoint = estimatedCollisionPoint;
+        DistanceToCollision = distanceToCollision;
+        TimeToCollision = timeToCollision;
+        ObstructedWaypointIndex = obstructedWaypointIndex;
+    }
+
+    public ThreatReport(
+        ThreatLevel threatLevel,
+        TrackedTarget threateningTrack,
+        Vector3 estimatedCollisionPoint,
+        float distanceToCollision,
+        float timeToCollision,
+        int obstructedWaypointIndex)
+    {
+        ThreatLevel = threatLevel;
+        ThreateningTrack = threateningTrack;
+        ThreateningObstacle = new DetectedObstacle(
+            null,
+            null,
+            threateningTrack.EstimatedPosition,
+            Vector3.zero,
+            Vector3.forward,
+            distanceToCollision,
+            0f,
+            Vector3.up,
+            threateningTrack.EstimatedVelocity,
+            threateningTrack.Speed > 0.1f);
         EstimatedCollisionPoint = estimatedCollisionPoint;
         DistanceToCollision = distanceToCollision;
         TimeToCollision = timeToCollision;
@@ -44,7 +75,7 @@ public struct ThreatReport
 
     public static ThreatReport Clear => new ThreatReport(
         ThreatLevel.None,
-        default,
+        default(DetectedObstacle),
         Vector3.zero,
         float.PositiveInfinity,
         float.PositiveInfinity,
@@ -52,8 +83,9 @@ public struct ThreatReport
 }
 
 /// <summary>
-/// Evaluates obstacles perceived by UAVPerception against the UAV's active flight trajectory
+/// Evaluates obstacles and multi-target tracked targets against the UAV's active flight trajectory
 /// to forecast potential collisions and assign threat levels.
+/// Operates strictly on TrackedTarget estimates and EstimatedState with zero ground-truth dependencies.
 /// </summary>
 [RequireComponent(typeof(UAVPerception))]
 [RequireComponent(typeof(PathFollower))]
@@ -194,18 +226,27 @@ public class ThreatAssessment : MonoBehaviour
 
     private UAVPerception perception;
     private PathFollower pathFollower;
+    private TrackManager trackManager;
     private ThreatReport currentReport = ThreatReport.Clear;
-    private readonly List<ThreatReport> allEvaluatedReports = new List<ThreatReport>();
-    private readonly List<ThreatReport> activeThreatReports = new List<ThreatReport>();
+    private readonly List<ThreatReport> allEvaluatedReports = new List<ThreatReport>(16);
+    private readonly List<ThreatReport> activeThreatReports = new List<ThreatReport>(16);
+    private readonly TrackedTarget[] trackedTargetBuffer = new TrackedTarget[64];
+
     private ThreatLevel lastThreatLevel = ThreatLevel.None;
     private GameObject lastCriticalObstacle = null;
+    private int lastCriticalTrackId = -1;
     private bool wasInCriticalState = false;
     private IEstimatedStateProvider stateProvider;
+
+    public void SetTrackManager(TrackManager manager) => trackManager = manager;
+    public void SetStateProvider(IEstimatedStateProvider provider) => stateProvider = provider;
+    public void SetPathFollower(PathFollower follower) => pathFollower = follower;
 
     private void Awake()
     {
         perception = GetComponent<UAVPerception>();
         pathFollower = GetComponent<PathFollower>();
+        trackManager = GetComponent<TrackManager>();
         stateProvider = GetComponent<IEstimatedStateProvider>();
     }
 
@@ -215,45 +256,277 @@ public class ThreatAssessment : MonoBehaviour
     }
 
     /// <summary>
-    /// Evaluates all perceived obstacles against the UAV's active flight trajectory.
+    /// Evaluates active threats using TrackManager targets if available, or legacy perception fallback.
     /// </summary>
     public void EvaluateThreats()
     {
-        if (perception == null || pathFollower == null)
+        // 1. Prefer Multi-Target TrackManager if attached and active
+        if (trackManager != null && trackManager.ActiveTrackCount > 0)
         {
-            currentReport = ThreatReport.Clear;
-            allEvaluatedReports.Clear();
-            activeThreatReports.Clear();
-            return;
+            int confirmedCount = trackManager.GetConfirmedTargets(trackedTargetBuffer, 0, 64);
+            if (confirmedCount > 0)
+            {
+                EvaluateTrackedTargets(trackedTargetBuffer, confirmedCount);
+                return;
+            }
         }
 
+        // 2. Legacy Perception Fallback
+        if (perception != null && pathFollower != null)
+        {
+            IReadOnlyList<DetectedObstacle> obstacles = perception.DetectedObstacles;
+            if (obstacles != null && obstacles.Count > 0)
+            {
+                EvaluateLegacyObstacles(obstacles);
+                return;
+            }
+        }
+
+        // 3. Clear threat state
+        currentReport = ThreatReport.Clear;
+        allEvaluatedReports.Clear();
+        activeThreatReports.Clear();
+        NotifyThreatState();
+    }
+
+    /// <summary>
+    /// Evaluates a collection of TrackedTarget estimates against the UAV's flight trajectory,
+    /// combining UAV ego uncertainty with target position uncertainty.
+    /// </summary>
+    public void EvaluateTrackedTargets(TrackedTarget[] targets, int count)
+    {
         allEvaluatedReports.Clear();
         activeThreatReports.Clear();
 
-        IReadOnlyList<DetectedObstacle> obstacles = perception.DetectedObstacles;
-        if (obstacles == null || obstacles.Count == 0)
+        if (targets == null || count <= 0)
         {
             currentReport = ThreatReport.Clear;
             NotifyThreatState();
             return;
         }
 
-        // Onboard Autonomy State Resolution (Strictly prefer EstimatedState over Ground Truth)
         Vector3 uavPos = (stateProvider != null && stateProvider.IsEstimatorReady)
             ? stateProvider.CurrentState.Position
             : transform.position;
 
         Vector3 uavVelocity = (stateProvider != null && stateProvider.IsEstimatorReady)
             ? stateProvider.CurrentState.Velocity
-            : pathFollower.CurrentVelocity;
+            : (pathFollower != null ? pathFollower.CurrentVelocity : Vector3.zero);
 
         Vector3 uavForward = (stateProvider != null && stateProvider.IsEstimatorReady)
             ? stateProvider.CurrentState.Forward
             : transform.forward;
 
-        float nominalSpeed = pathFollower.MoveSpeed;
-        IReadOnlyList<Node> remainingWaypoints = pathFollower.RemainingPath;
-        Vector3 targetWaypoint = pathFollower.TargetWaypoint;
+        float uavHorizSigma = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.HorizontalPositionStandardDeviation
+            : 0f;
+
+        float uavVertSigma = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.VerticalPositionStandardDeviation
+            : 0f;
+
+        ThreatReport highestReport = ThreatReport.Clear;
+
+        for (int i = 0; i < count; i++)
+        {
+            TrackedTarget target = targets[i];
+
+            // Ignore non-active tracking states
+            if (target.Status != TrackStatus.Confirmed && target.Status != TrackStatus.Coasting)
+            {
+                continue;
+            }
+
+            Vector3 toTarget = target.EstimatedPosition - uavPos;
+
+            // Ignore targets positioned behind the UAV
+            if (Vector3.Dot(toTarget, uavForward) < -0.1f)
+            {
+                continue;
+            }
+
+            // Combine spatial uncertainties: sigma_comb = sqrt(sigma_uav^2 + sigma_target^2)
+            float targetHorizSigma = target.HorizontalPositionStdDev;
+            float combinedHorizSigma = Mathf.Sqrt(uavHorizSigma * uavHorizSigma + targetHorizSigma * targetHorizSigma);
+
+            float targetVertSigma = target.VerticalPositionStdDev;
+            float combinedVertSigma = Mathf.Sqrt(uavVertSigma * uavVertSigma + targetVertSigma * targetVertSigma);
+
+            float effSafetyRadius = Mathf.Clamp(safetyRadius + sigmaMultiplier * combinedHorizSigma, minSafetyRadius, maxSafetyRadius);
+            float effVerticalMargin = Mathf.Clamp(verticalSafetyMargin + verticalSigmaMultiplier * combinedVertSigma, minVerticalSafetyMargin, maxVerticalSafetyMargin);
+            float effWarningRadius = Mathf.Clamp(warningRadius + sigmaMultiplier * combinedHorizSigma, minWarningRadius, maxWarningRadius);
+
+            // Compute Closest Point of Approach (CPA) and Time to Collision (TTC)
+            Vector3 vRel = target.EstimatedVelocity - uavVelocity;
+            float distance = toTarget.magnitude;
+            float vRelSq = vRel.sqrMagnitude;
+
+            float ttc = float.PositiveInfinity;
+            float distanceToCollision = distance;
+            Vector3 collisionPoint = Vector3.zero;
+            ThreatLevel level = ThreatLevel.None;
+
+            if (distance <= effSafetyRadius)
+            {
+                // Immediate collision / inside safety margin
+                level = ThreatLevel.Critical;
+                ttc = 0f;
+                distanceToCollision = distance;
+                collisionPoint = target.EstimatedPosition;
+            }
+            else if (vRelSq > 1e-6f)
+            {
+                // Convergence check
+                float tCpa = -Vector3.Dot(toTarget, vRel) / vRelSq;
+
+                if (tCpa > 0f)
+                {
+                    Vector3 pCpa = toTarget + vRel * tCpa;
+                    float dCpa = pCpa.magnitude;
+                    float vertSeparationCpa = Mathf.Abs(pCpa.y);
+
+                    if (dCpa <= effSafetyRadius && vertSeparationCpa <= effVerticalMargin && tCpa <= lookaheadTime)
+                    {
+                        level = ThreatLevel.Critical;
+                        ttc = tCpa;
+                        distanceToCollision = distance;
+                        collisionPoint = uavPos + uavVelocity * tCpa;
+                    }
+                    else if (dCpa <= effWarningRadius && tCpa <= lookaheadTime)
+                    {
+                        level = ThreatLevel.Warning;
+                        ttc = tCpa;
+                        distanceToCollision = distance;
+                        collisionPoint = uavPos + uavVelocity * tCpa;
+                    }
+                    else if (distance <= advisoryRadius)
+                    {
+                        level = ThreatLevel.Advisory;
+                        distanceToCollision = distance;
+                    }
+                }
+                else if (distance <= effWarningRadius)
+                {
+                    level = ThreatLevel.Warning;
+                    distanceToCollision = distance;
+                }
+                else if (distance <= advisoryRadius)
+                {
+                    level = ThreatLevel.Advisory;
+                    distanceToCollision = distance;
+                }
+            }
+            else
+            {
+                // Stationary or co-moving target
+                if (distance <= effWarningRadius)
+                {
+                    level = ThreatLevel.Warning;
+                    distanceToCollision = distance;
+                }
+                else if (distance <= advisoryRadius)
+                {
+                    level = ThreatLevel.Advisory;
+                    distanceToCollision = distance;
+                }
+            }
+
+            ThreatReport report = new ThreatReport(
+                level,
+                target,
+                collisionPoint,
+                distanceToCollision,
+                ttc,
+                0);
+
+            allEvaluatedReports.Add(report);
+            if (level >= ThreatLevel.Warning)
+            {
+                activeThreatReports.Add(report);
+            }
+
+            // Deterministic Multi-Target Selection: Severity > TTC > Distance > TrackId
+            if (IsMoreSevereThreat(report, highestReport))
+            {
+                highestReport = report;
+            }
+        }
+
+        // Sort active threats deterministically
+        if (activeThreatReports.Count > 1)
+        {
+            activeThreatReports.Sort((a, b) =>
+            {
+                int sev = b.ThreatLevel.CompareTo(a.ThreatLevel);
+                if (sev != 0) return sev;
+
+                int ttcComp = a.TimeToCollision.CompareTo(b.TimeToCollision);
+                if (ttcComp != 0) return ttcComp;
+
+                int distComp = a.DistanceToCollision.CompareTo(b.DistanceToCollision);
+                if (distComp != 0) return distComp;
+
+                return a.ThreateningTrack.TrackId.CompareTo(b.ThreateningTrack.TrackId);
+            });
+        }
+
+        currentReport = highestReport;
+        NotifyThreatState();
+    }
+
+    private static bool IsMoreSevereThreat(ThreatReport candidate, ThreatReport current)
+    {
+        if (candidate.ThreatLevel > current.ThreatLevel) return true;
+        if (candidate.ThreatLevel < current.ThreatLevel) return false;
+        if (candidate.ThreatLevel == ThreatLevel.None) return false;
+
+        // 1. TTC comparison
+        if (float.IsFinite(candidate.TimeToCollision) && !float.IsFinite(current.TimeToCollision)) return true;
+        if (!float.IsFinite(candidate.TimeToCollision) && float.IsFinite(current.TimeToCollision)) return false;
+        if (float.IsFinite(candidate.TimeToCollision) && float.IsFinite(current.TimeToCollision))
+        {
+            if (candidate.TimeToCollision < current.TimeToCollision - 0.001f) return true;
+            if (candidate.TimeToCollision > current.TimeToCollision + 0.001f) return false;
+        }
+
+        // 2. Distance comparison
+        if (float.IsFinite(candidate.DistanceToCollision) && !float.IsFinite(current.DistanceToCollision)) return true;
+        if (!float.IsFinite(candidate.DistanceToCollision) && float.IsFinite(current.DistanceToCollision)) return false;
+        if (float.IsFinite(candidate.DistanceToCollision) && float.IsFinite(current.DistanceToCollision))
+        {
+            if (candidate.DistanceToCollision < current.DistanceToCollision - 0.001f) return true;
+            if (candidate.DistanceToCollision > current.DistanceToCollision + 0.001f) return false;
+        }
+
+        // 3. TrackId tie-breaker
+        if (candidate.HasTrack && current.HasTrack)
+        {
+            return candidate.ThreateningTrack.TrackId < current.ThreateningTrack.TrackId;
+        }
+
+        return false;
+    }
+
+    private void EvaluateLegacyObstacles(IReadOnlyList<DetectedObstacle> obstacles)
+    {
+        allEvaluatedReports.Clear();
+        activeThreatReports.Clear();
+
+        Vector3 uavPos = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Position
+            : transform.position;
+
+        Vector3 uavVelocity = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Velocity
+            : (pathFollower != null ? pathFollower.CurrentVelocity : Vector3.zero);
+
+        Vector3 uavForward = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Forward
+            : transform.forward;
+
+        float nominalSpeed = pathFollower != null ? pathFollower.MoveSpeed : 5.0f;
+        IReadOnlyList<Node> remainingWaypoints = pathFollower != null ? pathFollower.RemainingPath : null;
+        Vector3 targetWaypoint = pathFollower != null ? pathFollower.TargetWaypoint : uavPos + uavForward * 10f;
 
         ThreatReport highestReport = ThreatReport.Clear;
         float effSafetyRadius = EffectiveSafetyRadius;
@@ -264,7 +537,6 @@ public class ThreatAssessment : MonoBehaviour
         {
             DetectedObstacle obs = obstacles[i];
 
-            // Ignore obstacles positioned behind the UAV
             Vector3 toObs = obs.WorldPosition - uavPos;
             if (Vector3.Dot(toObs, uavForward) < -0.1f)
                 continue;
@@ -304,7 +576,6 @@ public class ThreatAssessment : MonoBehaviour
             }
             else
             {
-                // No direct collision projected within lookahead window
                 bool isVerticallyClear = prediction.VerticalSeparation >= effVerticalMargin;
 
                 if (!isVerticallyClear && float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= effWarningRadius)
@@ -335,12 +606,9 @@ public class ThreatAssessment : MonoBehaviour
                 activeThreatReports.Add(report);
             }
 
-            // Keep the most severe valid threat for currentReport
-            bool shouldUpdateReport = false;
-
             if (evaluatedLevel > highestReport.ThreatLevel)
             {
-                shouldUpdateReport = true;
+                highestReport = report;
             }
             else if (evaluatedLevel == highestReport.ThreatLevel && evaluatedLevel != ThreatLevel.None)
             {
@@ -349,21 +617,15 @@ public class ThreatAssessment : MonoBehaviour
 
                 if (currentIsFinite && !highestIsFinite)
                 {
-                    shouldUpdateReport = true;
+                    highestReport = report;
                 }
                 else if (currentIsFinite && highestIsFinite && prediction.DistanceToCollision < highestReport.DistanceToCollision)
                 {
-                    shouldUpdateReport = true;
+                    highestReport = report;
                 }
-            }
-
-            if (shouldUpdateReport)
-            {
-                highestReport = report;
             }
         }
 
-        // Sort active threats with highest severity first
         if (activeThreatReports.Count > 1)
         {
             activeThreatReports.Sort((a, b) => b.ThreatLevel.CompareTo(a.ThreatLevel));
@@ -378,8 +640,7 @@ public class ThreatAssessment : MonoBehaviour
         bool isCritical = currentReport.ThreatLevel == ThreatLevel.Critical;
         bool isValidCritical = isCritical &&
                                float.IsFinite(currentReport.TimeToCollision) &&
-                               float.IsFinite(currentReport.DistanceToCollision) &&
-                               currentReport.ObstructedWaypointIndex >= 0;
+                               float.IsFinite(currentReport.DistanceToCollision);
 
         if (isCritical && !isValidCritical)
         {
@@ -390,21 +651,27 @@ public class ThreatAssessment : MonoBehaviour
         if (isValidCritical)
         {
             GameObject currentObstacle = currentReport.ThreateningObstacle.GameObject;
-            bool isNewCriticalEntry = !wasInCriticalState;
-            bool isDifferentObstacle = wasInCriticalState && (currentObstacle != null && currentObstacle != lastCriticalObstacle);
+            int currentTrackId = currentReport.HasTrack ? currentReport.ThreateningTrack.TrackId : -1;
 
-            // Raise OnCriticalThreatDetected ONLY on state entry or obstacle change
+            bool isNewCriticalEntry = !wasInCriticalState;
+            bool isDifferentObstacle = wasInCriticalState &&
+                ((currentObstacle != null && currentObstacle != lastCriticalObstacle) ||
+                 (currentTrackId != -1 && currentTrackId != lastCriticalTrackId));
+
             if (isNewCriticalEntry || isDifferentObstacle)
             {
                 wasInCriticalState = true;
                 lastCriticalObstacle = currentObstacle;
+                lastCriticalTrackId = currentTrackId;
 
-                string obsName = currentObstacle != null ? currentObstacle.name : "Obstacle";
+                string obsName = currentTrackId != -1
+                    ? $"Track #{currentTrackId}"
+                    : (currentObstacle != null ? currentObstacle.name : "Obstacle");
 
                 if (logCriticalThreats)
                 {
                     Debug.LogWarning(
-                        $"[ThreatAssessment] CRITICAL ENTERED | Obstacle={obsName} | " +
+                        $"[ThreatAssessment] CRITICAL ENTERED | Target={obsName} | " +
                         $"TTC={currentReport.TimeToCollision:F2}s | Dist={currentReport.DistanceToCollision:F2}m | " +
                         $"Wp={currentReport.ObstructedWaypointIndex}");
                 }
@@ -414,17 +681,20 @@ public class ThreatAssessment : MonoBehaviour
         }
         else
         {
-            // Leaving the Critical threat condition
             if (wasInCriticalState)
             {
-                string prevObsName = lastCriticalObstacle != null ? lastCriticalObstacle.name : "Obstacle";
+                string prevObsName = lastCriticalTrackId != -1
+                    ? $"Track #{lastCriticalTrackId}"
+                    : (lastCriticalObstacle != null ? lastCriticalObstacle.name : "Obstacle");
+
                 if (logCriticalThreats)
                 {
-                    Debug.Log($"[ThreatAssessment] CRITICAL CLEARED | Obstacle={prevObsName}");
+                    Debug.Log($"[ThreatAssessment] CRITICAL CLEARED | Target={prevObsName}");
                 }
 
                 wasInCriticalState = false;
                 lastCriticalObstacle = null;
+                lastCriticalTrackId = -1;
             }
         }
 
@@ -446,7 +716,6 @@ public class ThreatAssessment : MonoBehaviour
 
         Color threatColor = GetThreatColor(currentReport.ThreatLevel);
 
-        // 1. Draw Safety Corridor along Active Waypoints
         if (remainingWaypoints != null && remainingWaypoints.Count > 0)
         {
             Gizmos.color = new Color(threatColor.r, threatColor.g, threatColor.b, 0.35f);
@@ -461,7 +730,6 @@ public class ThreatAssessment : MonoBehaviour
 
                 Gizmos.DrawLine(prev, next);
 
-                // Draw corridor boundary offsets
                 Vector3 dir = (next - prev).normalized;
                 Vector3 perp = new Vector3(-dir.z, 0f, dir.x) * safetyRadius;
                 Gizmos.DrawLine(prev + perp, next + perp);
@@ -471,7 +739,6 @@ public class ThreatAssessment : MonoBehaviour
             }
         }
 
-        // 2. Draw Threat Visual Markers
         if (currentReport.ThreatLevel >= ThreatLevel.Warning)
         {
             Gizmos.color = threatColor;
@@ -495,7 +762,7 @@ public class ThreatAssessment : MonoBehaviour
         switch (level)
         {
             case ThreatLevel.Critical: return Color.red;
-            case ThreatLevel.Warning: return new Color(1f, 0.5f, 0f); // Orange
+            case ThreatLevel.Warning: return new Color(1f, 0.5f, 0f);
             case ThreatLevel.Advisory: return Color.yellow;
             default: return Color.green;
         }
