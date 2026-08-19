@@ -256,4 +256,52 @@ public class ThreeDimensionalTelemetryReportingTests
         Assert.AreEqual(1.0f, pathFollower.TargetAltitude, 0.01f, "Target altitude must recover to nominal altitude!");
         Assert.GreaterOrEqual(pathFollower.TargetAltitude, pathFollower.MinFlightAltitude, "Target altitude must not breach min flight altitude!");
     }
+
+    [Test]
+    public void TacticalExplainability_ExposesRejectionReasonsAndCounters()
+    {
+        // 1. Setup obstacle taller than MaxFlightAltitude (6.0m)
+        obstacleObj = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        obstacleObj.name = "CeilingBreachObstacle";
+        obstacleObj.layer = LayerMask.NameToLayer(ProceduralObstacleGenerator.ObstacleLayerName);
+        obstacleObj.transform.position = new Vector3(0f, 3.5f, 6f);
+        obstacleObj.transform.localScale = new Vector3(2f, 7.0f, 2f); // Top is at 7.0m > 6.0m max altitude
+        Physics.SyncTransforms();
+
+        uavObj.transform.position = new Vector3(0f, 1f, 0f);
+        pathFollower.StartFollowing(new List<Node> { new Node(true, new Vector3(0f, 1f, 20f), 0, 0) });
+
+        uavPerception.PerformScan();
+        threatAssessment.EvaluateThreats();
+
+        ThreatReport report = threatAssessment.CurrentThreatReport;
+        Assert.AreNotEqual(ThreatLevel.None, report.ThreatLevel);
+
+        TacticalDecisionReason lastReason = TacticalDecisionReason.None;
+        replanningController.OnTacticalDecisionMade += (reason, desc) => lastReason = reason;
+
+        // Try vertical evasion
+        bool feasible = replanningController.TryTacticalVerticalEvasion(report, out float targetAlt, out TacticalDecisionReason failureReason);
+
+        Assert.IsFalse(feasible, "Vertical evasion must be infeasible for 7.0m obstacle with 6.0m ceiling!");
+        Assert.AreEqual(TacticalDecisionReason.VerticalRejectedCeilingExceeded, failureReason);
+    }
+
+    [Test]
+    public void TacticalHUD_DisplaysTacticalDecisionReasonBadge()
+    {
+        uavObj.transform.position = new Vector3(0f, 1f, 0f);
+        MissionManager missionManager = uavObj.AddComponent<MissionManager>();
+        TacticalHUD hud = uavObj.AddComponent<TacticalHUD>();
+        typeof(TacticalHUD).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(hud, null);
+        typeof(TacticalHUD).GetMethod("Start", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(hud, null);
+
+        hud.RefreshDisplay(true);
+
+        FieldInfo telemetryTextField = typeof(TacticalHUD).GetField("telemetryText", BindingFlags.NonPublic | BindingFlags.Instance);
+        Text textComp = telemetryTextField?.GetValue(hud) as Text;
+
+        Assert.IsNotNull(textComp);
+        Assert.IsTrue(textComp.text.Contains("Tactical Decision:"), "HUD must contain Tactical Decision line!");
+    }
 }

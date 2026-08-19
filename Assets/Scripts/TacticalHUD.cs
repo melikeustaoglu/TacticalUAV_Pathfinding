@@ -424,6 +424,8 @@ public class TacticalHUD : MonoBehaviour
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Status:</color></b>   {threatBadgeStr}");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Active Threats:</color></b>  <color=#FFFFFF><b>{activeThreatsCount}</b></color>  <color=#88A2BF>(Peak: {peakThreats})</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Evasion Mode:</color></b>    {evasionModeStr}");
+        string decisionStr = GetTacticalDecisionText(replanningController != null ? replanningController.LatestDecisionReason : TacticalDecisionReason.None);
+        telemetrySb.AppendLine($"<b><color=#88A2BF>Tactical Decision:</color></b>{decisionStr}");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Dynamic Replans:</color></b> <color=#FFFFFF><b>{totalReplans}</b></color>  <color=#88A2BF>(Pacing: {pacingCount} | Vertical: {verticalCount} | Spatial: {spatialCount})</color>");
         telemetrySb.AppendLine($"<b><color=#88A2BF>Threat Events:</color></b>   <color=#FFFFFF><b>{missionManager.TotalThreatEncounters}</b></color>  <color=#88A2BF>({missionManager.CriticalThreatCount} Critical)</color>");
 
@@ -516,6 +518,29 @@ public class TacticalHUD : MonoBehaviour
                 stateBadgeText.text = "✖ MISSION FAILED (NO SAFE PATH)";
                 stateBadgeText.color = new Color(1f, 0.2f, 0.25f); // Crimson Red
                 break;
+        }
+    }
+
+    private static string GetTacticalDecisionText(TacticalDecisionReason reason)
+    {
+        switch (reason)
+        {
+            case TacticalDecisionReason.VOPacingApplied:
+                return "<color=#FFAA00>VO SPEED PACING</color>";
+            case TacticalDecisionReason.VerticalStepClimbed:
+                return "<color=#33CCFF>VERTICAL STEP CLIMB</color>";
+            case TacticalDecisionReason.VerticalRejectedCeilingExceeded:
+                return "<color=#FF6644>CEILING EXCEEDED → A* DETOUR</color>";
+            case TacticalDecisionReason.VerticalRejectedClimbTimeInfeasible:
+                return "<color=#FF9933>CLIMB TIME INFEASIBLE → A* DETOUR</color>";
+            case TacticalDecisionReason.VerticalRejectedMultiThreatConflict:
+                return "<color=#FFCC00>MULTI-THREAT CONFLICT → A* DETOUR</color>";
+            case TacticalDecisionReason.SpatialDetourExecuted:
+                return "<color=#00FFFF>A* DETOUR EXECUTION</color>";
+            case TacticalDecisionReason.NoSafePathHold:
+                return "<color=#FF2222>NO SAFE PATH → HOLD</color>";
+            default:
+                return "<color=#33FF88>CLEAR / NOMINAL</color>";
         }
     }
 }

@@ -85,6 +85,7 @@ public class MissionEventLogger : MonoBehaviour
             replanningController.OnNoSafePathFound += HandleNoSafePathFound;
             replanningController.OnSpeedPacingApplied += HandleSpeedPacingApplied;
             replanningController.OnVerticalEvasionExecuted += HandleVerticalEvasionExecuted;
+            replanningController.OnTacticalDecisionMade += HandleTacticalDecisionMade;
         }
 
         if (threatAssessment != null)
@@ -119,6 +120,7 @@ public class MissionEventLogger : MonoBehaviour
             replanningController.OnNoSafePathFound -= HandleNoSafePathFound;
             replanningController.OnSpeedPacingApplied -= HandleSpeedPacingApplied;
             replanningController.OnVerticalEvasionExecuted -= HandleVerticalEvasionExecuted;
+            replanningController.OnTacticalDecisionMade -= HandleTacticalDecisionMade;
         }
 
         if (threatAssessment != null)
@@ -202,6 +204,28 @@ public class MissionEventLogger : MonoBehaviour
     {
         RecordEvent("VERTICAL_EVASION_EXECUTED",
             $"Tactical step-climb commanded to altitude {targetAltitude:F2}m");
+    }
+
+    private void HandleTacticalDecisionMade(TacticalDecisionReason reason, string description)
+    {
+        switch (reason)
+        {
+            case TacticalDecisionReason.VerticalRejectedCeilingExceeded:
+                RecordEvent("VERTICAL_REJECTED_CEILING_EXCEEDED", description);
+                break;
+            case TacticalDecisionReason.VerticalRejectedClimbTimeInfeasible:
+                RecordEvent("VERTICAL_REJECTED_CLIMB_TIME_INFEASIBLE", description);
+                break;
+            case TacticalDecisionReason.VerticalRejectedMultiThreatConflict:
+                RecordEvent("VERTICAL_REJECTED_MULTI_THREAT_CONFLICT", description);
+                break;
+            case TacticalDecisionReason.SpatialDetourExecuted:
+                RecordEvent("SPATIAL_DETOUR_EXECUTED", description);
+                break;
+            case TacticalDecisionReason.NoSafePathHold:
+                RecordEvent("NO_SAFE_PATH_HOLD", description);
+                break;
+        }
     }
 
     private void HandleCriticalThreatDetected(ThreatReport report)

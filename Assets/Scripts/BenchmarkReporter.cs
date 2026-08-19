@@ -43,6 +43,15 @@ public class MissionBenchmarkReport
     public float maxFlightAltitude;
     public float nominalFlightAltitude;
 
+    [Header("Tactical Decision Summary")]
+    public string dominantTacticalDecision;
+    public int voPacingDecisions;
+    public int verticalStepClimbs;
+    public int verticalCeilingRejections;
+    public int verticalClimbTimeRejections;
+    public int verticalMultiThreatRejections;
+    public int safeHoldDecisions;
+
     [Header("Evaluation Scores")]
     public float overallScore;
     public float safetyScore;
@@ -174,7 +183,17 @@ public class BenchmarkReporter : MonoBehaviour
         report.maxFlightAltitude = pathFollower != null ? pathFollower.MaxFlightAltitude : (cfg != null ? cfg.maxFlightAltitude : 6.0f);
         report.nominalFlightAltitude = cfg != null ? cfg.nominalFlightAltitude : (replanningController != null ? replanningController.NominalAltitude : 1.0f);
 
-        // 3. Evaluation Scores
+        // 3. Tactical Decision Summary
+        report.dominantTacticalDecision = replanningController != null ? replanningController.LatestDecisionReason.ToString() : "None";
+        report.voPacingDecisions = replanningController != null ? replanningController.VoPacingDecisions : 0;
+        report.verticalStepClimbs = replanningController != null ? replanningController.VerticalStepClimbs : 0;
+        report.verticalCeilingRejections = replanningController != null ? replanningController.VerticalCeilingRejections : 0;
+        report.verticalClimbTimeRejections = replanningController != null ? replanningController.VerticalClimbTimeRejections : 0;
+        report.verticalMultiThreatRejections = replanningController != null ? replanningController.VerticalMultiThreatRejections : 0;
+        report.spatialDetours = replanningController != null ? replanningController.SpatialReplanCount : result.TotalReplans;
+        report.safeHoldDecisions = replanningController != null ? replanningController.SafeHoldDecisions : 0;
+
+        // 4. Evaluation Scores
         float nominalSpeed = report.cruiseSpeed;
         MissionScore score = missionManager != null && missionManager.Score.HasValue
             ? missionManager.Score.Value

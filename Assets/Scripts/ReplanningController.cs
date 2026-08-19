@@ -15,6 +15,21 @@ public enum NavigationState
 }
 
 /// <summary>
+/// Categorizes the physical rationale and tactical mechanism chosen by the 3-axis evasion hierarchy.
+/// </summary>
+public enum TacticalDecisionReason
+{
+    None,
+    VOPacingApplied,
+    VerticalStepClimbed,
+    VerticalRejectedCeilingExceeded,
+    VerticalRejectedClimbTimeInfeasible,
+    VerticalRejectedMultiThreatConflict,
+    SpatialDetourExecuted,
+    NoSafePathHold
+}
+
+/// <summary>
 /// Autonomous Dynamic Replanning Controller.
 /// Listens to ThreatAssessment telemetry and orchestrates real-time A* path replanning
 /// from the UAV's current flight position to the mission target when collision risks arise.
@@ -43,6 +58,7 @@ public class ReplanningController : MonoBehaviour
     public int ReplanCount => replanCount;
     public float LastReplanTime => lastReplanTime;
     public Vector3 LastReplanPosition => lastReplanPosition;
+    public TacticalDecisionReason LatestDecisionReason => latestDecisionReason;
 
     // Reactive Events for External Systems
     public event Action<NavigationState> OnStateChanged;
@@ -50,6 +66,7 @@ public class ReplanningController : MonoBehaviour
     public event Action OnNoSafePathFound;
     public event Action<float, float> OnSpeedPacingApplied;
     public event Action<float> OnVerticalEvasionExecuted;
+    public event Action<TacticalDecisionReason, string> OnTacticalDecisionMade;
 
     [Header("Altitude Recovery Configuration")]
     [SerializeField] private float nominalAltitude = 1.0f;
@@ -71,6 +88,13 @@ public class ReplanningController : MonoBehaviour
     private int verticalEvasionCount = 0;
     private int spatialReplanCount = 0;
     private int peakSimultaneousThreats = 0;
+    private int voPacingDecisions = 0;
+    private int verticalStepClimbs = 0;
+    private int verticalCeilingRejections = 0;
+    private int verticalClimbTimeRejections = 0;
+    private int verticalMultiThreatRejections = 0;
+    private int safeHoldDecisions = 0;
+    private TacticalDecisionReason latestDecisionReason = TacticalDecisionReason.None;
     private Vector3 lastReplanPosition;
     private GameObject currentlyAvoidingObstacle = null;
     private readonly HashSet<GameObject> currentlyAvoidingObstacles = new HashSet<GameObject>();
@@ -81,6 +105,12 @@ public class ReplanningController : MonoBehaviour
     public int VerticalEvasionCount => verticalEvasionCount;
     public int SpatialReplanCount => spatialReplanCount;
     public int PeakSimultaneousThreats => peakSimultaneousThreats;
+    public int VoPacingDecisions => voPacingDecisions;
+    public int VerticalStepClimbs => verticalStepClimbs;
+    public int VerticalCeilingRejections => verticalCeilingRejections;
+    public int VerticalClimbTimeRejections => verticalClimbTimeRejections;
+    public int VerticalMultiThreatRejections => verticalMultiThreatRejections;
+    public int SafeHoldDecisions => safeHoldDecisions;
 
     private void Awake()
     {
@@ -193,6 +223,8 @@ public class ReplanningController : MonoBehaviour
             lastReplanTime = Time.time;
             replanCount++;
             speedPacingCount++;
+            voPacingDecisions++;
+            latestDecisionReason = TacticalDecisionReason.VOPacingApplied;
             currentlyAvoidingObstacle = report.ThreateningObstacle.GameObject;
             currentlyAvoidingObstacles.Clear();
             if (currentlyAvoidingObstacle != null) currentlyAvoidingObstacles.Add(currentlyAvoidingObstacle);
@@ -210,6 +242,7 @@ public class ReplanningController : MonoBehaviour
 
             SetState(NavigationState.Rerouting);
             OnSpeedPacingApplied?.Invoke(speedRatio, overrideDuration);
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, $"VO Speed Pacing applied at {speedRatio:P0} cruise speed for {overrideDuration:F1}s");
 
             if (logReplanningEvents)
             {
@@ -229,13 +262,15 @@ public class ReplanningController : MonoBehaviour
         }
 
         // Stage 2: Try Tactical Vertical Step Climb / Descent
-        if (TryTacticalVerticalEvasion(report, out float targetAltitude))
+        if (TryTacticalVerticalEvasion(report, out float targetAltitude, out TacticalDecisionReason verticalRejectionReason))
         {
             pathFollower.SetTargetAltitude(targetAltitude);
             lastReplanPosition = transform.position;
             lastReplanTime = Time.time;
             replanCount++;
             verticalEvasionCount++;
+            verticalStepClimbs++;
+            latestDecisionReason = TacticalDecisionReason.VerticalStepClimbed;
             currentlyAvoidingObstacle = report.ThreateningObstacle.GameObject;
             currentlyAvoidingObstacles.Clear();
             if (currentlyAvoidingObstacle != null) currentlyAvoidingObstacles.Add(currentlyAvoidingObstacle);
@@ -253,6 +288,7 @@ public class ReplanningController : MonoBehaviour
 
             SetState(NavigationState.Rerouting);
             OnVerticalEvasionExecuted?.Invoke(targetAltitude);
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, $"Vertical Step Climb commanded to {targetAltitude:F2}m");
 
             if (logReplanningEvents)
             {
@@ -269,6 +305,25 @@ public class ReplanningController : MonoBehaviour
             }
 
             return true;
+        }
+
+        // Record why Stage 2 was rejected before escalating to Stage 3
+        if (verticalRejectionReason != TacticalDecisionReason.None)
+        {
+            switch (verticalRejectionReason)
+            {
+                case TacticalDecisionReason.VerticalRejectedCeilingExceeded:
+                    verticalCeilingRejections++;
+                    break;
+                case TacticalDecisionReason.VerticalRejectedClimbTimeInfeasible:
+                    verticalClimbTimeRejections++;
+                    break;
+                case TacticalDecisionReason.VerticalRejectedMultiThreatConflict:
+                    verticalMultiThreatRejections++;
+                    break;
+            }
+            latestDecisionReason = verticalRejectionReason;
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, $"Vertical Evasion rejected: {verticalRejectionReason}");
         }
 
         // Stage 3: Fall back to Spatial A* Dynamic Replanning
@@ -352,6 +407,8 @@ public class ReplanningController : MonoBehaviour
             // Transition active flight path to the newly calculated safe detour
             pathFollower.StartFollowing(pathfinding.path);
             SetState(NavigationState.Rerouting);
+            latestDecisionReason = TacticalDecisionReason.SpatialDetourExecuted;
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, $"Spatial A* Detour executed with {pathfinding.path.Count} waypoints");
 
             if (logReplanningEvents)
             {
@@ -376,6 +433,9 @@ public class ReplanningController : MonoBehaviour
             // If no valid path exists around the obstacle, enter emergency safe hold
             pathFollower.StopFollowing();
             SetState(NavigationState.NoSafePath);
+            safeHoldDecisions++;
+            latestDecisionReason = TacticalDecisionReason.NoSafePathHold;
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, "Emergency Safe Hold commanded (No safe path found)");
 
             Debug.LogWarning(
                 $"<color=#FF4500><b>[ReplanningController] DYNAMIC REPLAN FAILED</b></color>\n" +
@@ -636,16 +696,22 @@ public class ReplanningController : MonoBehaviour
                 return true;
             }
         }
-
-        return false;
-    }
-
     /// <summary>
     /// Evaluates whether a tactical vertical step climb or descent can safely clear all active threats.
     /// Checks flight ceiling/floor bounds, climb-time feasibility at CPA, and multi-threat clearance.
     /// </summary>
     public bool TryTacticalVerticalEvasion(ThreatReport primaryReport, out float targetAltitude)
     {
+        return TryTacticalVerticalEvasion(primaryReport, out targetAltitude, out _);
+    }
+
+    /// <summary>
+    /// Evaluates whether a tactical vertical step climb or descent can safely clear all active threats,
+    /// returning the specific TacticalDecisionReason failure code if infeasible.
+    /// </summary>
+    public bool TryTacticalVerticalEvasion(ThreatReport primaryReport, out float targetAltitude, out TacticalDecisionReason failureReason)
+    {
+        failureReason = TacticalDecisionReason.None;
         targetAltitude = transform.position.y;
 
         if (pathFollower == null || !pathFollower.IsFollowing)
@@ -666,7 +732,11 @@ public class ReplanningController : MonoBehaviour
         float candidateClimbAltitude = primaryTopY + verticalSafetyMargin;
 
         // 2. Flight Ceiling Check
-        if (candidateClimbAltitude <= maxAltitude)
+        if (candidateClimbAltitude > maxAltitude)
+        {
+            failureReason = TacticalDecisionReason.VerticalRejectedCeilingExceeded;
+        }
+        else
         {
             // 3. Climb-Time Feasibility Check at CPA
             float tAvail = float.IsFinite(primaryReport.TimeToCollision) && primaryReport.TimeToCollision > 0f
@@ -693,7 +763,11 @@ public class ReplanningController : MonoBehaviour
                 }
             }
 
-            if (isClimbFeasible)
+            if (!isClimbFeasible)
+            {
+                failureReason = TacticalDecisionReason.VerticalRejectedClimbTimeInfeasible;
+            }
+            else
             {
                 // 4. Multi-Threat Clearance Check: candidate altitude must clear all active threats
                 bool clearsAllThreats = true;
@@ -716,7 +790,11 @@ public class ReplanningController : MonoBehaviour
                     }
                 }
 
-                if (clearsAllThreats)
+                if (!clearsAllThreats)
+                {
+                    failureReason = TacticalDecisionReason.VerticalRejectedMultiThreatConflict;
+                }
+                else
                 {
                     targetAltitude = Mathf.Clamp(candidateClimbAltitude, minAltitude, maxAltitude);
                     return true;
@@ -740,6 +818,7 @@ public class ReplanningController : MonoBehaviour
             if (reqDescent <= 0f || (maxDescentRate * tAvail >= reqDescent))
             {
                 targetAltitude = Mathf.Clamp(candidateDescentAltitude, minAltitude, maxAltitude);
+                failureReason = TacticalDecisionReason.None;
                 return true;
             }
         }
