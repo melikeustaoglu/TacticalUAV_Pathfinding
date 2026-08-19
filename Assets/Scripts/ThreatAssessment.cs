@@ -69,6 +69,9 @@ public class ThreatAssessment : MonoBehaviour
     [Tooltip("Cross-track distance threshold for Advisory classification in meters.")]
     [SerializeField] private float advisoryRadius = 4.0f;
 
+    [Tooltip("Vertical clearance safety margin in meters above obstacle top.")]
+    [SerializeField] private float verticalSafetyMargin = 0.5f;
+
     [Tooltip("Forward trajectory lookahead forecasting time in seconds.")]
     [SerializeField] private float lookaheadTime = 4.5f;
 
@@ -84,6 +87,13 @@ public class ThreatAssessment : MonoBehaviour
     public IReadOnlyList<ThreatReport> AllEvaluatedReports => allEvaluatedReports;
     public IReadOnlyList<ThreatReport> ActiveThreatReports => activeThreatReports;
     public float SafetyRadius => safetyRadius;
+    public float WarningRadius => warningRadius;
+    public float AdvisoryRadius => advisoryRadius;
+    public float VerticalSafetyMargin
+    {
+        get => verticalSafetyMargin;
+        set => verticalSafetyMargin = Mathf.Max(0f, value);
+    }
     public float LookaheadTime => lookaheadTime;
 
     // Reactive Events for modular subscribers
@@ -159,7 +169,8 @@ public class ThreatAssessment : MonoBehaviour
                 targetWaypoint,
                 obs,
                 safetyRadius,
-                lookaheadTime);
+                lookaheadTime,
+                verticalSafetyMargin);
 
             bool hasValidCollision = prediction.WillCollide &&
                                     float.IsFinite(prediction.DistanceToCollision) &&
@@ -186,11 +197,13 @@ public class ThreatAssessment : MonoBehaviour
             else
             {
                 // No direct collision projected within lookahead window
-                if (float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= warningRadius)
+                bool isVerticallyClear = prediction.VerticalSeparation >= verticalSafetyMargin;
+
+                if (!isVerticallyClear && float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= warningRadius)
                 {
                     evaluatedLevel = ThreatLevel.Warning;
                 }
-                else if (float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= advisoryRadius)
+                else if (!isVerticallyClear && float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= advisoryRadius)
                 {
                     evaluatedLevel = ThreatLevel.Advisory;
                 }

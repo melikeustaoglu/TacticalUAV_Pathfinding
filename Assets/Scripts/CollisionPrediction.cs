@@ -102,6 +102,7 @@ public struct CollisionPredictionResult
     public Vector3 EstimatedCollisionPoint { get; }
     public float CrossTrackDistance { get; }
     public int ObstructedWaypointIndex { get; }
+    public float VerticalSeparation { get; }
 
     public CollisionPredictionResult(
         bool willCollide,
@@ -109,7 +110,8 @@ public struct CollisionPredictionResult
         float distanceToCollision,
         Vector3 estimatedCollisionPoint,
         float crossTrackDistance,
-        int obstructedWaypointIndex)
+        int obstructedWaypointIndex,
+        float verticalSeparation = 0f)
     {
         WillCollide = willCollide;
         TimeToCollision = timeToCollision;
@@ -117,6 +119,7 @@ public struct CollisionPredictionResult
         EstimatedCollisionPoint = estimatedCollisionPoint;
         CrossTrackDistance = crossTrackDistance;
         ObstructedWaypointIndex = obstructedWaypointIndex;
+        VerticalSeparation = verticalSeparation;
     }
 
     public static CollisionPredictionResult Clear => new CollisionPredictionResult(
@@ -125,15 +128,17 @@ public struct CollisionPredictionResult
         float.PositiveInfinity,
         Vector3.zero,
         float.PositiveInfinity,
-        -1);
+        -1,
+        float.PositiveInfinity);
 
-    public static CollisionPredictionResult NoCollision(float crossTrackDistance) => new CollisionPredictionResult(
+    public static CollisionPredictionResult NoCollision(float crossTrackDistance, float verticalSeparation = float.PositiveInfinity) => new CollisionPredictionResult(
         false,
         float.PositiveInfinity,
         float.PositiveInfinity,
         Vector3.zero,
         crossTrackDistance,
-        -1);
+        -1,
+        verticalSeparation);
 }
 
 /// <summary>
@@ -153,6 +158,7 @@ public static class CollisionPrediction
     /// <param name="obstacle">Detected obstacle data.</param>
     /// <param name="safetyRadius">UAV safety clearance envelope radius.</param>
     /// <param name="lookaheadTime">Forward time window in seconds.</param>
+    /// <param name="verticalSafetyMargin">Vertical clearance buffer in meters above obstacle top.</param>
     /// <returns>Prediction result with collision metrics.</returns>
     public static CollisionPredictionResult PredictPathCollision(
         Vector3 currentPosition,
@@ -162,13 +168,19 @@ public static class CollisionPrediction
         Vector3 targetWaypoint,
         DetectedObstacle obstacle,
         float safetyRadius,
-        float lookaheadTime)
+        float lookaheadTime,
+        float verticalSafetyMargin = 0.5f)
     {
         float speed = currentVelocity.magnitude > 0.05f ? currentVelocity.magnitude : Mathf.Max(0.5f, nominalSpeed);
         float maxLookaheadDistance = speed * lookaheadTime;
 
         Vector3 obstaclePos = obstacle.WorldPosition;
-        Vector3 obstacleCenter = obstacle.Collider != null ? obstacle.Collider.bounds.center : obstaclePos;
+        float obstacleTopY = obstaclePos.y + 0.5f;
+
+        if (obstacle.Collider != null)
+        {
+            obstacleTopY = obstacle.Collider.bounds.max.y;
+        }
 
         // Build composite trajectory segments from current position through upcoming waypoints
         List<Vector3> trajectoryPoints = new List<Vector3>(16);
@@ -178,9 +190,13 @@ public static class CollisionPrediction
         {
             for (int i = 0; i < remainingWaypoints.Count; i++)
             {
+                float wpY = remainingWaypoints[i].worldPosition.y > 0.001f
+                    ? remainingWaypoints[i].worldPosition.y
+                    : currentPosition.y;
+
                 Vector3 wp = new Vector3(
                     remainingWaypoints[i].worldPosition.x,
-                    currentPosition.y,
+                    wpY,
                     remainingWaypoints[i].worldPosition.z);
 
                 if (i == 0 && Vector3.Distance(currentPosition, wp) < 0.1f)
@@ -196,8 +212,10 @@ public static class CollisionPrediction
 
         float cumulativeDistance = 0f;
         float minCrossTrack = float.MaxValue;
+        float minVerticalSeparation = float.MaxValue;
         Vector3 bestCollisionPoint = Vector3.zero;
         float bestDistanceToCollision = float.MaxValue;
+        float bestVerticalSeparation = 0f;
         int bestWaypointIndex = -1;
         bool collisionFound = false;
 
@@ -219,6 +237,7 @@ public static class CollisionPrediction
             float crossTrackDistance;
             Vector3 closestPointOnSegment;
             float alongPathDistance;
+            float verticalSeparation;
 
             if (obstacle.IsDynamic && obstacle.Velocity.sqrMagnitude > 0.0001f)
             {
@@ -239,6 +258,10 @@ public static class CollisionPrediction
                 float distOnSeg = speed * (tEval - t0);
                 alongPathDistance = cumulativeDistance + distOnSeg;
                 closestPointOnSegment = segStart + segDir * distOnSeg;
+
+                Vector3 obsPosAtEval = obstaclePos + obstacle.Velocity * (tEval - t0);
+                float dynTopY = obsPosAtEval.y + (obstacle.Collider != null ? obstacle.Collider.bounds.extents.y : 0.5f);
+                verticalSeparation = closestPointOnSegment.y - dynTopY;
             }
             else
             {
@@ -262,21 +285,27 @@ public static class CollisionPrediction
                 }
 
                 alongPathDistance = cumulativeDistance + clampedProj;
+                verticalSeparation = closestPointOnSegment.y - obstacleTopY;
             }
 
             if (crossTrackDistance < minCrossTrack)
             {
                 minCrossTrack = crossTrackDistance;
+                minVerticalSeparation = verticalSeparation;
             }
 
             // Check if path segment physically breaches the safety envelope
-            if (crossTrackDistance <= safetyRadius && alongPathDistance <= maxLookaheadDistance)
+            // A collision occurs ONLY IF horizontal cross-track is within safety radius AND vertical separation is below vertical safety margin
+            bool isVerticallySafe = verticalSeparation >= verticalSafetyMargin;
+
+            if (!isVerticallySafe && crossTrackDistance <= safetyRadius && alongPathDistance <= maxLookaheadDistance)
             {
                 if (alongPathDistance < bestDistanceToCollision)
                 {
                     bestDistanceToCollision = alongPathDistance;
                     bestCollisionPoint = closestPointOnSegment;
                     bestWaypointIndex = i;
+                    bestVerticalSeparation = verticalSeparation;
                     collisionFound = true;
                 }
             }
@@ -293,10 +322,11 @@ public static class CollisionPrediction
                 bestDistanceToCollision,
                 bestCollisionPoint,
                 minCrossTrack,
-                bestWaypointIndex);
+                bestWaypointIndex,
+                bestVerticalSeparation);
         }
 
-        return CollisionPredictionResult.NoCollision(minCrossTrack);
+        return CollisionPredictionResult.NoCollision(minCrossTrack, minVerticalSeparation);
     }
 
     /// <summary>
