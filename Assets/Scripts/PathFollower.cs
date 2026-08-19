@@ -57,6 +57,7 @@ public class PathFollower : MonoBehaviour
 
     private Rigidbody rb;
     private Pathfinding pathfinding;
+    private IEstimatedStateProvider stateProvider;
     private List<Node> currentPath;
     private int pathIndex;
     private bool isFollowing;
@@ -72,7 +73,7 @@ public class PathFollower : MonoBehaviour
     public float CurrentFlightSpeed => currentFlightSpeed;
     public float CurrentVerticalSpeed => currentVerticalSpeed;
     public Vector3 CurrentVelocity => isFollowing ? currentVelocity : Vector3.zero;
-    public Vector3 TargetWaypoint => (currentPath != null && pathIndex < currentPath.Count) ? GetTargetPosition(currentPath[pathIndex]) : transform.position;
+    public Vector3 TargetWaypoint => (currentPath != null && pathIndex < currentPath.Count) ? GetTargetPosition(currentPath[pathIndex]) : GetEstimatedPosition();
     public IReadOnlyList<Node> RemainingPath => (currentPath != null && pathIndex < currentPath.Count)
         ? currentPath.GetRange(pathIndex, currentPath.Count - pathIndex)
         : (IReadOnlyList<Node>)Array.Empty<Node>();
@@ -80,6 +81,13 @@ public class PathFollower : MonoBehaviour
 
     // Events
     public event Action OnDestinationReached;
+
+    private Vector3 GetEstimatedPosition()
+    {
+        return (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Position
+            : transform.position;
+    }
 
     public float MoveSpeed
     {
@@ -212,6 +220,7 @@ public class PathFollower : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
         pathfinding = FindFirstObjectByType<Pathfinding>();
+        stateProvider = GetComponent<IEstimatedStateProvider>();
         lastPosition = transform.position;
         targetAltitude = transform.position.y;
     }

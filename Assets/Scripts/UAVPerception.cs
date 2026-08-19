@@ -103,6 +103,7 @@ public class UAVPerception : MonoBehaviour
     private readonly List<DetectedObstacle> detectedObstacles = new List<DetectedObstacle>(16);
     private DetectedObstacle nearestObstacle;
     private bool hadObstaclesLastFrame;
+    private IEstimatedStateProvider stateProvider;
 
     private void Awake()
     {
@@ -110,6 +111,8 @@ public class UAVPerception : MonoBehaviour
         {
             obstacleMask = ProceduralObstacleGenerator.GetObstacleMask();
         }
+
+        stateProvider = GetComponent<IEstimatedStateProvider>();
     }
 
     private void Update()
@@ -120,6 +123,15 @@ public class UAVPerception : MonoBehaviour
     /// <summary>
     /// Executes a forward sensor scan using non-allocating physics overlap queries,
     /// horizontal FOV angular filtering, and line-of-sight raycasts.
+    ///
+    /// ARCHITECTURAL NOTE (Phase 11.1 Sensor/Simulation Boundary):
+    /// -----------------------------------------------------------------------------------------------
+    /// Physics.OverlapSphereNonAlloc and Physics.Raycast originate from the physical sensor mount pose
+    /// (transform.position and transform.forward) in the simulation world.
+    /// In Phase 11.2, observation noise (range/bearing Gaussian noise) and multi-target Kalman tracking
+    /// will be introduced so obstacle tracks are published with estimated velocities rather than
+    /// reading DynamicObstacle.CurrentVelocity directly.
+    /// -----------------------------------------------------------------------------------------------
     /// </summary>
     public void PerformScan()
     {
@@ -128,6 +140,7 @@ public class UAVPerception : MonoBehaviour
         float minDistance = float.MaxValue;
         bool hasNearest = false;
 
+        // Physical sensor mount origin in simulation world
         Vector3 sensorPos = transform.position;
         Vector3 sensorForward = transform.forward;
 

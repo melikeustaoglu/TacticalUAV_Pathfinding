@@ -118,6 +118,21 @@ public class ReplanningController : MonoBehaviour
         threatAssessment = GetComponent<ThreatAssessment>();
         perception = GetComponent<UAVPerception>();
         pathfinding = FindFirstObjectByType<Pathfinding>();
+        stateProvider = GetComponent<IEstimatedStateProvider>();
+    }
+
+    private Vector3 GetEstimatedPosition()
+    {
+        return (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Position
+            : transform.position;
+    }
+
+    private float GetEstimatedAltitude()
+    {
+        return (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Position.y
+            : transform.position.y;
     }
 
     private void Start()
@@ -219,7 +234,7 @@ public class ReplanningController : MonoBehaviour
         {
             float overrideDuration = float.IsFinite(report.TimeToCollision) ? report.TimeToCollision + 1.5f : 4.0f;
             pathFollower.ApplyTacticalSpeedOverride(speedRatio, overrideDuration);
-            lastReplanPosition = transform.position;
+            lastReplanPosition = GetEstimatedPosition();
             lastReplanTime = Time.time;
             replanCount++;
             speedPacingCount++;
@@ -265,7 +280,7 @@ public class ReplanningController : MonoBehaviour
         if (TryTacticalVerticalEvasion(report, out float targetAltitude, out TacticalDecisionReason verticalRejectionReason))
         {
             pathFollower.SetTargetAltitude(targetAltitude);
-            lastReplanPosition = transform.position;
+            lastReplanPosition = GetEstimatedPosition();
             lastReplanTime = Time.time;
             replanCount++;
             verticalEvasionCount++;
@@ -299,7 +314,7 @@ public class ReplanningController : MonoBehaviour
                 Debug.Log(
                     $"<color=#33CCFF><b>[ReplanningController] STAGE 2: VERTICAL STEP CLIMB APPLIED (Replan #{replanCount} | Vertical #{verticalEvasionCount})</b></color>\n" +
                     $"  • Obstacle: {obsName}\n" +
-                    $"  • Target Altitude: {targetAltitude:F2}m (Current: {transform.position.y:F2}m)\n" +
+                    $"  • Target Altitude: {targetAltitude:F2}m (Current: {GetEstimatedAltitude():F2}m)\n" +
                     $"  • TTC: {report.TimeToCollision:F2}s | Distance: {report.DistanceToCollision:F2}m\n" +
                     $"  • Evasion: Vertical step-climb cleared 3D obstacle volume without spatial detour.");
             }
@@ -336,7 +351,7 @@ public class ReplanningController : MonoBehaviour
 
         SetState(NavigationState.Replanning);
 
-        Vector3 currentPos = transform.position;
+        Vector3 currentPos = GetEstimatedPosition();
         Vector3 targetPos = pathfinding.targetTransform.position;
         lastReplanPosition = currentPos;
         lastReplanTime = Time.time;
@@ -590,7 +605,7 @@ public class ReplanningController : MonoBehaviour
         if (pathFollower == null || !pathFollower.IsFollowing)
             return false;
 
-        Vector3 uavPos = transform.position;
+        Vector3 uavPos = GetEstimatedPosition();
         float combinedRadius = threatAssessment != null ? threatAssessment.SafetyRadius + 0.5f : 1.5f;
 
         // 1. Gather all active dynamic threats to evaluate (bounded to top 5)
@@ -712,12 +727,12 @@ public class ReplanningController : MonoBehaviour
     public bool TryTacticalVerticalEvasion(ThreatReport primaryReport, out float targetAltitude, out TacticalDecisionReason failureReason)
     {
         failureReason = TacticalDecisionReason.None;
-        targetAltitude = transform.position.y;
+        targetAltitude = GetEstimatedAltitude();
 
         if (pathFollower == null || !pathFollower.IsFollowing)
             return false;
 
-        float currentAltitude = transform.position.y;
+        float currentAltitude = GetEstimatedAltitude();
         float minAltitude = pathFollower.MinFlightAltitude;
         float maxAltitude = pathFollower.MaxFlightAltitude;
         float maxClimbRate = pathFollower.MaxClimbRate;

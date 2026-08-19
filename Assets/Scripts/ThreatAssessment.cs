@@ -108,11 +108,13 @@ public class ThreatAssessment : MonoBehaviour
     private ThreatLevel lastThreatLevel = ThreatLevel.None;
     private GameObject lastCriticalObstacle = null;
     private bool wasInCriticalState = false;
+    private IEstimatedStateProvider stateProvider;
 
     private void Awake()
     {
         perception = GetComponent<UAVPerception>();
         pathFollower = GetComponent<PathFollower>();
+        stateProvider = GetComponent<IEstimatedStateProvider>();
     }
 
     private void Update()
@@ -144,8 +146,19 @@ public class ThreatAssessment : MonoBehaviour
             return;
         }
 
-        Vector3 uavPos = transform.position;
-        Vector3 uavVelocity = pathFollower.CurrentVelocity;
+        // Onboard Autonomy State Resolution (Strictly prefer EstimatedState over Ground Truth)
+        Vector3 uavPos = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Position
+            : transform.position;
+
+        Vector3 uavVelocity = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Velocity
+            : pathFollower.CurrentVelocity;
+
+        Vector3 uavForward = (stateProvider != null && stateProvider.IsEstimatorReady)
+            ? stateProvider.CurrentState.Forward
+            : transform.forward;
+
         float nominalSpeed = pathFollower.MoveSpeed;
         IReadOnlyList<Node> remainingWaypoints = pathFollower.RemainingPath;
         Vector3 targetWaypoint = pathFollower.TargetWaypoint;
@@ -158,7 +171,7 @@ public class ThreatAssessment : MonoBehaviour
 
             // Ignore obstacles positioned behind the UAV
             Vector3 toObs = obs.WorldPosition - uavPos;
-            if (Vector3.Dot(toObs, transform.forward) < -0.1f)
+            if (Vector3.Dot(toObs, uavForward) < -0.1f)
                 continue;
 
             CollisionPredictionResult prediction = CollisionPrediction.PredictPathCollision(

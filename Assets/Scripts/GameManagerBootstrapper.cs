@@ -29,6 +29,11 @@ public static class GameManagerBootstrapper
         uavObject.layer = LayerMask.NameToLayer("Default");
 
         ApplyBrightMaterial(uavObject);
+        uavObject.AddComponent<SimulatedGpsSensor>();
+        uavObject.AddComponent<SimulatedImuSensor>();
+        uavObject.AddComponent<SimulatedBaroAltimeter>();
+        uavObject.AddComponent<EkfStateProvider>();
+        uavObject.AddComponent<StateEstimationDiagnostics>();
         uavObject.AddComponent<PathFollower>();
         uavObject.AddComponent<UAVPerception>();
         uavObject.AddComponent<ThreatAssessment>();
