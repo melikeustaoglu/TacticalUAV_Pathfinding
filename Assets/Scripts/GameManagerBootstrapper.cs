@@ -10,7 +10,12 @@ public static class GameManagerBootstrapper
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
     {
-        if (GameObject.Find(SystemObjectName) != null)
+        if (Application.isBatchMode || GameObject.Find(SystemObjectName) != null)
+            return;
+
+        // Skip automatic standalone game bootstrap when running in an automated test scene
+        string activeSceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        if (!string.IsNullOrEmpty(activeSceneName) && activeSceneName.StartsWith("InitTestScene"))
             return;
 
         GameObject systemObject = CreatePathfindingSystem();

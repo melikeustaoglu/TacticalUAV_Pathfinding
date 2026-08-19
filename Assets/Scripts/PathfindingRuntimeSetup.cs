@@ -20,6 +20,14 @@ public class PathfindingRuntimeSetup : MonoBehaviour
 
     private void Start()
     {
+        if (Application.isBatchMode)
+            return;
+
+        // Skip automatic scene execution when running in an automated test scene
+        string activeSceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+        if (!string.IsNullOrEmpty(activeSceneName) && activeSceneName.StartsWith("InitTestScene"))
+            return;
+
         GridManager gridManager = GetComponent<GridManager>();
         Pathfinding pathfinding = GetComponent<Pathfinding>();
         if (gridManager == null || pathfinding == null)
