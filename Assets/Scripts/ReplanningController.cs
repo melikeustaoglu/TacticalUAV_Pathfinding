@@ -71,10 +71,70 @@ public class ReplanningController : MonoBehaviour
     [Header("Altitude Recovery Configuration")]
     [SerializeField] private float nominalAltitude = 1.0f;
 
+    [Header("Uncertainty-Aware Navigation Settings")]
+    [Tooltip("Nominal horizontal uncertainty threshold below which cruise speed is 100% (meters).")]
+    [SerializeField] private float nominalUncertaintyThreshold = 0.15f;
+
+    [Tooltip("Sensitivity coefficient for cruise speed scaling under horizontal position uncertainty.")]
+    [SerializeField] private float speedScaleSensitivity = 0.60f;
+
+    [Tooltip("Minimum allowable cruise speed scale under high uncertainty.")]
+    [SerializeField] private float minCruiseSpeedScale = 0.60f;
+
+    [Tooltip("Sensitivity coefficient for emergency TTC expansion under horizontal position uncertainty.")]
+    [SerializeField] private float ttcExpansionSensitivity = 2.5f;
+
+    [Tooltip("Maximum allowable emergency TTC threshold in seconds.")]
+    [SerializeField] private float maxEmergencyTtcThreshold = 6.0f;
+
+    [Tooltip("Maximum vertical position uncertainty permitting altitude recovery in meters.")]
+    [SerializeField] private float maxAltitudeRecoveryVerticalStdDev = 0.35f;
+
     public float NominalAltitude
     {
         get => nominalAltitude;
         set => nominalAltitude = Mathf.Max(0.5f, value);
+    }
+
+    public float NominalUncertaintyThreshold => nominalUncertaintyThreshold;
+    public float SpeedScaleSensitivity => speedScaleSensitivity;
+    public float MinCruiseSpeedScale => minCruiseSpeedScale;
+    public float TtcExpansionSensitivity => ttcExpansionSensitivity;
+    public float MaxEmergencyTtcThreshold => maxEmergencyTtcThreshold;
+    public float MaxAltitudeRecoveryVerticalStdDev => maxAltitudeRecoveryVerticalStdDev;
+
+    /// <summary>
+    /// Effective cruise speed scale based on horizontal position uncertainty:
+    /// V_scale = clamp(1.0 - 0.60 * max(0, sigma_horiz - 0.15), 0.60, 1.0).
+    /// </summary>
+    public float EffectiveCruiseSpeedScale
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return 1.0f;
+
+            float horizSigma = stateProvider.CurrentState.HorizontalPositionStandardDeviation;
+            float excessSigma = Mathf.Max(0f, horizSigma - nominalUncertaintyThreshold);
+            return Mathf.Clamp(1.0f - speedScaleSensitivity * excessSigma, minCruiseSpeedScale, 1.0f);
+        }
+    }
+
+    /// <summary>
+    /// Effective emergency Time-To-Collision threshold based on horizontal position uncertainty:
+    /// TTC_eff = clamp(emergencyTtcThreshold + 2.5 * max(0, sigma_horiz - 0.15), emergencyTtcThreshold, maxEmergencyTtcThreshold).
+    /// </summary>
+    public float EffectiveEmergencyTtcThreshold
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return emergencyTtcThreshold;
+
+            float horizSigma = stateProvider.CurrentState.HorizontalPositionStandardDeviation;
+            float excessSigma = Mathf.Max(0f, horizSigma - nominalUncertaintyThreshold);
+            return Mathf.Clamp(emergencyTtcThreshold + ttcExpansionSensitivity * excessSigma, emergencyTtcThreshold, maxEmergencyTtcThreshold);
+        }
     }
 
     private PathFollower pathFollower;
@@ -181,7 +241,7 @@ public class ReplanningController : MonoBehaviour
 
     private void HandleThreatEvaluated(ThreatReport report)
     {
-        if (report.ThreatLevel >= triggerThreshold && report.TimeToCollision <= emergencyTtcThreshold)
+        if (report.ThreatLevel >= triggerThreshold && report.TimeToCollision <= EffectiveEmergencyTtcThreshold)
         {
             if (State == NavigationState.Replanning)
                 return;
@@ -551,11 +611,22 @@ public class ReplanningController : MonoBehaviour
     /// <summary>
     /// Smoothly commands target altitude recovery toward nominal flight altitude
     /// once the UAV has safely cleared all relevant obstacle volumes.
+    /// Safety Gated: Permitted ONLY when EstimatorStatus == Nominal and vertical uncertainty <= 0.35m.
     /// </summary>
     public void RecoverNominalAltitude()
     {
         if (pathFollower == null)
             return;
+
+        // Safety Gate: Altitude recovery to nominal cruise altitude is permitted ONLY when EstimatorStatus == Nominal and sigma_vert <= maxAltitudeRecoveryVerticalStdDev
+        if (stateProvider != null && stateProvider.IsEstimatorReady)
+        {
+            if (stateProvider.CurrentState.Status != EstimatorStatus.Nominal)
+                return;
+
+            if (stateProvider.CurrentState.VerticalPositionStandardDeviation > maxAltitudeRecoveryVerticalStdDev)
+                return;
+        }
 
         if (pathFollower.TargetAltitude > nominalAltitude + 0.05f)
         {
