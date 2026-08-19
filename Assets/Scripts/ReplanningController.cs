@@ -57,6 +57,7 @@ public class ReplanningController : MonoBehaviour
     private float lastReplanTime = -10f;
     private int replanCount = 0;
     private int speedPacingCount = 0;
+    private int verticalEvasionCount = 0;
     private int spatialReplanCount = 0;
     private int peakSimultaneousThreats = 0;
     private Vector3 lastReplanPosition;
@@ -66,6 +67,7 @@ public class ReplanningController : MonoBehaviour
     public GameObject CurrentlyAvoidingObstacle => currentlyAvoidingObstacle;
     public IReadOnlyCollection<GameObject> CurrentlyAvoidingObstacles => currentlyAvoidingObstacles;
     public int SpeedPacingCount => speedPacingCount;
+    public int VerticalEvasionCount => verticalEvasionCount;
     public int SpatialReplanCount => spatialReplanCount;
     public int PeakSimultaneousThreats => peakSimultaneousThreats;
 
@@ -134,7 +136,9 @@ public class ReplanningController : MonoBehaviour
     }
 
     /// <summary>
-    /// Attempts to dynamically replan the UAV's flight route from its current position to the mission target.
+    /// Attempts to dynamically replan the UAV's flight route from its current position to the mission target
+    /// using the 3-Axis Tactical Evasion Hierarchy:
+    /// Stage 1 (VO Speed Pacing) -> Stage 2 (Vertical Step Climb) -> Stage 3 (Spatial Re-A*) -> Stage 4 (Fail-Safe).
     /// </summary>
     public bool TryExecuteReplan(string triggerReason, ThreatReport report)
     {
@@ -196,7 +200,7 @@ public class ReplanningController : MonoBehaviour
                     : "Dynamic Obstacle";
 
                 Debug.Log(
-                    $"<color=#00FF99><b>[ReplanningController] VO TACTICAL SPEED PACING APPLIED (Replan #{replanCount} | Pacing #{speedPacingCount})</b></color>\n" +
+                    $"<color=#00FF99><b>[ReplanningController] STAGE 1: VO TACTICAL SPEED PACING APPLIED (Replan #{replanCount} | Pacing #{speedPacingCount})</b></color>\n" +
                     $"  • Obstacle: {obsName} (Dynamic)\n" +
                     $"  • Speed Override: {speedRatio:P0} of cruise speed for {overrideDuration:F1}s\n" +
                     $"  • TTC: {report.TimeToCollision:F2}s | Distance: {report.DistanceToCollision:F2}m\n" +
@@ -206,7 +210,49 @@ public class ReplanningController : MonoBehaviour
             return true;
         }
 
-        // Stage 2: Fall back to Spatial A* Dynamic Replanning
+        // Stage 2: Try Tactical Vertical Step Climb / Descent
+        if (TryTacticalVerticalEvasion(report, out float targetAltitude))
+        {
+            pathFollower.SetTargetAltitude(targetAltitude);
+            lastReplanPosition = transform.position;
+            lastReplanTime = Time.time;
+            replanCount++;
+            verticalEvasionCount++;
+            currentlyAvoidingObstacle = report.ThreateningObstacle.GameObject;
+            currentlyAvoidingObstacles.Clear();
+            if (currentlyAvoidingObstacle != null) currentlyAvoidingObstacles.Add(currentlyAvoidingObstacle);
+
+            if (threatAssessment != null && threatAssessment.ActiveThreatReports != null)
+            {
+                for (int i = 0; i < threatAssessment.ActiveThreatReports.Count; i++)
+                {
+                    if (threatAssessment.ActiveThreatReports[i].ThreateningObstacle.GameObject != null)
+                    {
+                        currentlyAvoidingObstacles.Add(threatAssessment.ActiveThreatReports[i].ThreateningObstacle.GameObject);
+                    }
+                }
+            }
+
+            SetState(NavigationState.Rerouting);
+
+            if (logReplanningEvents)
+            {
+                string obsName = report.ThreateningObstacle.GameObject != null
+                    ? report.ThreateningObstacle.GameObject.name
+                    : "Obstacle";
+
+                Debug.Log(
+                    $"<color=#33CCFF><b>[ReplanningController] STAGE 2: VERTICAL STEP CLIMB APPLIED (Replan #{replanCount} | Vertical #{verticalEvasionCount})</b></color>\n" +
+                    $"  • Obstacle: {obsName}\n" +
+                    $"  • Target Altitude: {targetAltitude:F2}m (Current: {transform.position.y:F2}m)\n" +
+                    $"  • TTC: {report.TimeToCollision:F2}s | Distance: {report.DistanceToCollision:F2}m\n" +
+                    $"  • Evasion: Vertical step-climb cleared 3D obstacle volume without spatial detour.");
+            }
+
+            return true;
+        }
+
+        // Stage 3: Fall back to Spatial A* Dynamic Replanning
         if (pathfinding == null || pathfinding.targetTransform == null)
         {
             pathfinding = FindFirstObjectByType<Pathfinding>();
@@ -543,6 +589,113 @@ public class ReplanningController : MonoBehaviour
             if (isCandidateSafeAgainstAll)
             {
                 recommendedSpeedRatio = ratio;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Evaluates whether a tactical vertical step climb or descent can safely clear all active threats.
+    /// Checks flight ceiling/floor bounds, climb-time feasibility at CPA, and multi-threat clearance.
+    /// </summary>
+    public bool TryTacticalVerticalEvasion(ThreatReport primaryReport, out float targetAltitude)
+    {
+        targetAltitude = transform.position.y;
+
+        if (pathFollower == null || !pathFollower.IsFollowing)
+            return false;
+
+        float currentAltitude = transform.position.y;
+        float minAltitude = pathFollower.MinFlightAltitude;
+        float maxAltitude = pathFollower.MaxFlightAltitude;
+        float maxClimbRate = pathFollower.MaxClimbRate;
+        float maxDescentRate = pathFollower.MaxDescentRate;
+        float verticalSafetyMargin = threatAssessment != null ? threatAssessment.VerticalSafetyMargin : 0.5f;
+
+        // 1. Determine primary obstacle top ceiling
+        float primaryTopY = primaryReport.ThreateningObstacle.GameObject != null && primaryReport.ThreateningObstacle.Collider != null
+            ? primaryReport.ThreateningObstacle.Collider.bounds.max.y
+            : primaryReport.ThreateningObstacle.WorldPosition.y + 0.5f;
+
+        float candidateClimbAltitude = primaryTopY + verticalSafetyMargin;
+
+        // 2. Flight Ceiling Check
+        if (candidateClimbAltitude <= maxAltitude)
+        {
+            // 3. Climb-Time Feasibility Check at CPA
+            float tAvail = float.IsFinite(primaryReport.TimeToCollision) && primaryReport.TimeToCollision > 0f
+                ? primaryReport.TimeToCollision
+                : (float.IsFinite(primaryReport.DistanceToCollision) && primaryReport.DistanceToCollision > 0f && pathFollower.MoveSpeed > 0.1f
+                    ? primaryReport.DistanceToCollision / pathFollower.MoveSpeed
+                    : 2.0f);
+
+            float reqClimb = candidateClimbAltitude - currentAltitude;
+
+            // If already at or above altitude, or can achieve climb within tAvail
+            bool isClimbFeasible = false;
+            if (reqClimb <= 0f)
+            {
+                isClimbFeasible = true;
+            }
+            else
+            {
+                // Maximum climb distance in tAvail
+                float achievableClimb = maxClimbRate * Mathf.Max(0f, tAvail - 0.2f);
+                if (achievableClimb >= reqClimb || (maxClimbRate * tAvail >= reqClimb))
+                {
+                    isClimbFeasible = true;
+                }
+            }
+
+            if (isClimbFeasible)
+            {
+                // 4. Multi-Threat Clearance Check: candidate altitude must clear all active threats
+                bool clearsAllThreats = true;
+
+                if (threatAssessment != null && threatAssessment.ActiveThreatReports != null && threatAssessment.ActiveThreatReports.Count > 0)
+                {
+                    for (int i = 0; i < threatAssessment.ActiveThreatReports.Count; i++)
+                    {
+                        ThreatReport r = threatAssessment.ActiveThreatReports[i];
+                        float obsTop = r.ThreateningObstacle.GameObject != null && r.ThreateningObstacle.Collider != null
+                            ? r.ThreateningObstacle.Collider.bounds.max.y
+                            : r.ThreateningObstacle.WorldPosition.y + 0.5f;
+
+                        if (candidateClimbAltitude < obsTop + verticalSafetyMargin)
+                        {
+                            // Another active threat is too tall for this candidate altitude
+                            clearsAllThreats = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (clearsAllThreats)
+                {
+                    targetAltitude = Mathf.Clamp(candidateClimbAltitude, minAltitude, maxAltitude);
+                    return true;
+                }
+            }
+        }
+
+        // 5. If climb is not feasible or blocked, evaluate Descent (for high overhangs/bridges)
+        float primaryBottomY = primaryReport.ThreateningObstacle.GameObject != null && primaryReport.ThreateningObstacle.Collider != null
+            ? primaryReport.ThreateningObstacle.Collider.bounds.min.y
+            : Mathf.Max(0f, primaryReport.ThreateningObstacle.WorldPosition.y - 0.5f);
+
+        float candidateDescentAltitude = primaryBottomY - verticalSafetyMargin;
+        if (candidateDescentAltitude >= minAltitude)
+        {
+            float tAvail = float.IsFinite(primaryReport.TimeToCollision) && primaryReport.TimeToCollision > 0f
+                ? primaryReport.TimeToCollision
+                : 2.0f;
+
+            float reqDescent = currentAltitude - candidateDescentAltitude;
+            if (reqDescent <= 0f || (maxDescentRate * tAvail >= reqDescent))
+            {
+                targetAltitude = Mathf.Clamp(candidateDescentAltitude, minAltitude, maxAltitude);
                 return true;
             }
         }
