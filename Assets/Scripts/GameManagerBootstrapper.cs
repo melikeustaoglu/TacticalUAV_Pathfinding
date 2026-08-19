@@ -56,6 +56,7 @@ public static class GameManagerBootstrapper
         uavObject.AddComponent<TacticalHUD>();
         uavObject.AddComponent<MissionEventLogger>();
         uavObject.AddComponent<BenchmarkReporter>();
+        uavObject.AddComponent<TacticalUAVDiagnosticsGizmos>();
 
         return uavObject;
     }

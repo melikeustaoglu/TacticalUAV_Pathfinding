@@ -626,6 +626,23 @@ public class TrackManager : MonoBehaviour
     }
 
     /// <summary>
+    /// Copies all active targets (Tentative, Confirmed, Coasting, Lost) into the caller-provided array.
+    /// Returns the number of targets copied.
+    /// </summary>
+    public int GetAllTargets(TrackedTarget[] outputBuffer, int offset, int maxCount)
+    {
+        if (outputBuffer == null || offset < 0 || maxCount <= 0) return 0;
+
+        int written = 0;
+        for (int i = 0; i < activeTrackCount && written < maxCount && (offset + written) < outputBuffer.Length; i++)
+        {
+            outputBuffer[offset + written] = publishedTargets[i];
+            written++;
+        }
+        return written;
+    }
+
+    /// <summary>
     /// Returns a specific track record by TrackId, or null if not found.
     /// </summary>
     public TrackRecord GetTrack(int trackId)
