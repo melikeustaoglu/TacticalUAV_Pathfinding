@@ -79,4 +79,32 @@ public class UAVScenarioConfig : ScriptableObject
 
     [Tooltip("Patrol loop pattern: PingPong or Loop.")]
     public PatrolLoopMode dynamicLoopMode = PatrolLoopMode.PingPong;
+
+    [Header("3D Airspace & Obstacle Height Configuration")]
+    [Tooltip("Enable variable 3D vertical obstacle heights. If false, preserves legacy isotropic cube dimensions.")]
+    public bool enableVariableObstacleHeights = false;
+
+    [Tooltip("Minimum procedural obstacle height in meters.")]
+    [Range(0.5f, 10.0f)]
+    public float minObstacleHeight = 1.0f;
+
+    [Tooltip("Maximum procedural obstacle height in meters.")]
+    [Range(1.0f, 20.0f)]
+    public float maxObstacleHeight = 4.0f;
+
+    [Tooltip("Default fixed obstacle height when variable height generation is disabled.")]
+    [Range(0.5f, 10.0f)]
+    public float defaultObstacleHeight = 2.0f;
+
+    [Tooltip("Minimum allowable UAV flight altitude in meters.")]
+    [Range(0.5f, 10.0f)]
+    public float minFlightAltitude = 1.0f;
+
+    [Tooltip("Maximum allowable UAV flight ceiling altitude in meters.")]
+    [Range(1.0f, 25.0f)]
+    public float maxFlightAltitude = 6.0f;
+
+    [Tooltip("Nominal cruise flight altitude in meters.")]
+    [Range(0.5f, 10.0f)]
+    public float nominalFlightAltitude = 1.0f;
 }

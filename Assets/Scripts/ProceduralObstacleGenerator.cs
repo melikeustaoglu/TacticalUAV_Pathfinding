@@ -36,7 +36,11 @@ public static class ProceduralObstacleGenerator
         int dynamicObstacleCount = 0,
         float dynamicObstacleSpeed = 1.0f,
         ObstacleMovementMode dynamicMovementMode = ObstacleMovementMode.Patrol,
-        PatrolLoopMode dynamicLoopMode = PatrolLoopMode.PingPong)
+        PatrolLoopMode dynamicLoopMode = PatrolLoopMode.PingPong,
+        bool enableVariableObstacleHeights = false,
+        float minObstacleHeight = 1.0f,
+        float maxObstacleHeight = 4.0f,
+        float defaultObstacleHeight = 2.0f)
     {
         int obstacleLayer = LayerMask.NameToLayer(ObstacleLayerName);
         if (obstacleLayer < 0)
@@ -54,6 +58,10 @@ public static class ProceduralObstacleGenerator
         int spawnedCount = 0;
         List<Vector3> spawnedPositions = new List<Vector3>();
 
+        float effectiveMinHeight = Mathf.Min(minObstacleHeight, maxObstacleHeight);
+        float effectiveMaxHeight = Mathf.Max(minObstacleHeight, maxObstacleHeight);
+        float effectiveDefaultHeight = Mathf.Clamp(defaultObstacleHeight, effectiveMinHeight, effectiveMaxHeight);
+
         // 1. Guaranteed corridor-blocking cluster perpendicular to the direct start-to-target route
         Vector3 directLine = targetPosition - startPosition;
         Vector3 flatDir = new Vector3(directLine.x, 0f, directLine.z);
@@ -64,32 +72,50 @@ public static class ProceduralObstacleGenerator
 
         if (flatDist > ClearanceRadius * 2f)
         {
+            float centerHeight = enableVariableObstacleHeights ? effectiveDefaultHeight : 2.5f;
+            float flankHeight = enableVariableObstacleHeights ? effectiveDefaultHeight : 2.0f;
+
+            float centerY = enableVariableObstacleHeights ? (centerHeight * 0.5f) : 0.5f;
+            float flankY = enableVariableObstacleHeights ? (flankHeight * 0.5f) : 0.5f;
+
             Vector3 midPoint = new Vector3(
                 (startPosition.x + targetPosition.x) * 0.5f,
-                0.5f,
+                centerY,
                 (startPosition.z + targetPosition.z) * 0.5f
             );
 
             // Center blocker directly on the straight-line path
             if (spawnedCount < obstacleCount && !IsTooCloseToPoint(midPoint, startPosition, ClearanceRadius) && !IsTooCloseToPoint(midPoint, targetPosition, ClearanceRadius))
             {
-                SpawnObstacle(obstaclesParent.transform, midPoint, 2.5f, ++spawnedCount, obstacleLayer);
+                Vector3 centerScale = enableVariableObstacleHeights
+                    ? new Vector3(2.5f, centerHeight, 2.5f)
+                    : Vector3.one * 2.5f;
+
+                SpawnObstacle(obstaclesParent.transform, midPoint, centerScale, ++spawnedCount, obstacleLayer);
                 spawnedPositions.Add(midPoint);
             }
 
             // Left flank blocker to widen the detour
-            Vector3 leftFlank = midPoint + perp * 2.2f;
+            Vector3 leftFlank = new Vector3(midPoint.x + perp.x * 2.2f, flankY, midPoint.z + perp.z * 2.2f);
             if (spawnedCount < obstacleCount && !IsTooCloseToPoint(leftFlank, startPosition, ClearanceRadius) && !IsTooCloseToPoint(leftFlank, targetPosition, ClearanceRadius))
             {
-                SpawnObstacle(obstaclesParent.transform, leftFlank, 2.0f, ++spawnedCount, obstacleLayer);
+                Vector3 flankScale = enableVariableObstacleHeights
+                    ? new Vector3(2.0f, flankHeight, 2.0f)
+                    : Vector3.one * 2.0f;
+
+                SpawnObstacle(obstaclesParent.transform, leftFlank, flankScale, ++spawnedCount, obstacleLayer);
                 spawnedPositions.Add(leftFlank);
             }
 
             // Right flank blocker
-            Vector3 rightFlank = midPoint - perp * 2.2f;
+            Vector3 rightFlank = new Vector3(midPoint.x - perp.x * 2.2f, flankY, midPoint.z - perp.z * 2.2f);
             if (spawnedCount < obstacleCount && !IsTooCloseToPoint(rightFlank, startPosition, ClearanceRadius) && !IsTooCloseToPoint(rightFlank, targetPosition, ClearanceRadius))
             {
-                SpawnObstacle(obstaclesParent.transform, rightFlank, 2.0f, ++spawnedCount, obstacleLayer);
+                Vector3 flankScale = enableVariableObstacleHeights
+                    ? new Vector3(2.0f, flankHeight, 2.0f)
+                    : Vector3.one * 2.0f;
+
+                SpawnObstacle(obstaclesParent.transform, rightFlank, flankScale, ++spawnedCount, obstacleLayer);
                 spawnedPositions.Add(rightFlank);
             }
         }
@@ -150,7 +176,20 @@ public static class ProceduralObstacleGenerator
                 continue;
 
             float size = (float)(1.2 + rng.NextDouble() * 1.3);
-            SpawnObstacle(obstaclesParent.transform, candidatePosition, size, ++spawnedCount, obstacleLayer);
+
+            if (enableVariableObstacleHeights)
+            {
+                float height = effectiveMinHeight + (float)(rng.NextDouble() * (effectiveMaxHeight - effectiveMinHeight));
+                candidatePosition.y = height * 0.5f; // Ground alignment: bottom plane at Y = 0
+                Vector3 scale = new Vector3(size, height, size);
+                SpawnObstacle(obstaclesParent.transform, candidatePosition, scale, ++spawnedCount, obstacleLayer);
+            }
+            else
+            {
+                candidatePosition.y = 0.5f;
+                SpawnObstacle(obstaclesParent.transform, candidatePosition, size, ++spawnedCount, obstacleLayer);
+            }
+
             spawnedPositions.Add(candidatePosition);
         }
 
@@ -180,11 +219,16 @@ public static class ProceduralObstacleGenerator
 
     private static GameObject SpawnObstacle(Transform parent, Vector3 position, float size, int index, int layer)
     {
+        return SpawnObstacle(parent, position, Vector3.one * size, index, layer);
+    }
+
+    private static GameObject SpawnObstacle(Transform parent, Vector3 position, Vector3 scale, int index, int layer)
+    {
         GameObject obstacle = GameObject.CreatePrimitive(PrimitiveType.Cube);
         obstacle.name = $"Obstacle_{index}";
         obstacle.transform.SetParent(parent);
         obstacle.transform.position = position;
-        obstacle.transform.localScale = Vector3.one * size;
+        obstacle.transform.localScale = scale;
         obstacle.layer = layer;
         return obstacle;
     }

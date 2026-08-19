@@ -46,6 +46,10 @@ public class PathfindingRuntimeSetup : MonoBehaviour
         float effectiveDynamicSpeed = scenarioConfig != null ? scenarioConfig.dynamicObstacleSpeed : 1.0f;
         ObstacleMovementMode effectiveDynamicMode = scenarioConfig != null ? scenarioConfig.dynamicMovementMode : ObstacleMovementMode.Patrol;
         PatrolLoopMode effectiveDynamicLoop = scenarioConfig != null ? scenarioConfig.dynamicLoopMode : PatrolLoopMode.PingPong;
+        bool effectiveEnableVariableHeights = scenarioConfig != null && scenarioConfig.enableVariableObstacleHeights;
+        float effectiveMinHeight = scenarioConfig != null ? scenarioConfig.minObstacleHeight : 1.0f;
+        float effectiveMaxHeight = scenarioConfig != null ? scenarioConfig.maxObstacleHeight : 4.0f;
+        float effectiveDefaultHeight = scenarioConfig != null ? scenarioConfig.defaultObstacleHeight : 2.0f;
 
         ProceduralObstacleGenerator.Generate(
             gridManager.transform,
@@ -61,7 +65,11 @@ public class PathfindingRuntimeSetup : MonoBehaviour
             effectiveDynamicCount,
             effectiveDynamicSpeed,
             effectiveDynamicMode,
-            effectiveDynamicLoop);
+            effectiveDynamicLoop,
+            effectiveEnableVariableHeights,
+            effectiveMinHeight,
+            effectiveMaxHeight,
+            effectiveDefaultHeight);
 
         if (scenarioConfig != null)
         {
