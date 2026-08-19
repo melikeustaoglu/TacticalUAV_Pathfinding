@@ -75,6 +75,31 @@ public class ThreatAssessment : MonoBehaviour
     [Tooltip("Forward trajectory lookahead forecasting time in seconds.")]
     [SerializeField] private float lookaheadTime = 4.5f;
 
+    [Header("Uncertainty-Aware Safety Parameters")]
+    [Tooltip("Sigma multiplier for horizontal position uncertainty.")]
+    [SerializeField] private float sigmaMultiplier = 2.0f;
+
+    [Tooltip("Sigma multiplier for vertical altitude uncertainty.")]
+    [SerializeField] private float verticalSigmaMultiplier = 2.0f;
+
+    [Tooltip("Minimum allowable effective safety radius in meters.")]
+    [SerializeField] private float minSafetyRadius = 1.0f;
+
+    [Tooltip("Maximum allowable effective safety radius in meters.")]
+    [SerializeField] private float maxSafetyRadius = 2.5f;
+
+    [Tooltip("Minimum allowable effective vertical safety margin in meters.")]
+    [SerializeField] private float minVerticalSafetyMargin = 0.5f;
+
+    [Tooltip("Maximum allowable effective vertical safety margin in meters.")]
+    [SerializeField] private float maxVerticalSafetyMargin = 1.5f;
+
+    [Tooltip("Minimum allowable effective warning radius in meters.")]
+    [SerializeField] private float minWarningRadius = 2.2f;
+
+    [Tooltip("Maximum allowable effective warning radius in meters.")]
+    [SerializeField] private float maxWarningRadius = 4.0f;
+
     [Header("Logging & Diagnostics")]
     [SerializeField] private bool logCriticalThreats = true;
 
@@ -95,6 +120,73 @@ public class ThreatAssessment : MonoBehaviour
         set => verticalSafetyMargin = Mathf.Max(0f, value);
     }
     public float LookaheadTime => lookaheadTime;
+
+    public float SigmaMultiplier
+    {
+        get => sigmaMultiplier;
+        set => sigmaMultiplier = Mathf.Max(0f, value);
+    }
+
+    public float VerticalSigmaMultiplier
+    {
+        get => verticalSigmaMultiplier;
+        set => verticalSigmaMultiplier = Mathf.Max(0f, value);
+    }
+
+    public float MinSafetyRadius => minSafetyRadius;
+    public float MaxSafetyRadius => maxSafetyRadius;
+    public float MinVerticalSafetyMargin => minVerticalSafetyMargin;
+    public float MaxVerticalSafetyMargin => maxVerticalSafetyMargin;
+    public float MinWarningRadius => minWarningRadius;
+    public float MaxWarningRadius => maxWarningRadius;
+
+    /// <summary>
+    /// Effective uncertainty-aware horizontal safety radius in meters:
+    /// R_eff = clamp(safetyRadius + sigmaMultiplier * horizontalSigma, minSafetyRadius, maxSafetyRadius).
+    /// </summary>
+    public float EffectiveSafetyRadius
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return safetyRadius;
+
+            float horizSigma = stateProvider.CurrentState.HorizontalPositionStandardDeviation;
+            return Mathf.Clamp(safetyRadius + sigmaMultiplier * horizSigma, minSafetyRadius, maxSafetyRadius);
+        }
+    }
+
+    /// <summary>
+    /// Effective uncertainty-aware vertical safety clearance margin in meters:
+    /// M_eff = clamp(verticalSafetyMargin + verticalSigmaMultiplier * verticalSigma, minVerticalSafetyMargin, maxVerticalSafetyMargin).
+    /// </summary>
+    public float EffectiveVerticalSafetyMargin
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return verticalSafetyMargin;
+
+            float vertSigma = stateProvider.CurrentState.VerticalPositionStandardDeviation;
+            return Mathf.Clamp(verticalSafetyMargin + verticalSigmaMultiplier * vertSigma, minVerticalSafetyMargin, maxVerticalSafetyMargin);
+        }
+    }
+
+    /// <summary>
+    /// Effective uncertainty-aware warning radius threshold in meters:
+    /// R_warning_eff = clamp(warningRadius + sigmaMultiplier * horizontalSigma, minWarningRadius, maxWarningRadius).
+    /// </summary>
+    public float EffectiveWarningRadius
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return warningRadius;
+
+            float horizSigma = stateProvider.CurrentState.HorizontalPositionStandardDeviation;
+            return Mathf.Clamp(warningRadius + sigmaMultiplier * horizSigma, minWarningRadius, maxWarningRadius);
+        }
+    }
 
     // Reactive Events for modular subscribers
     public event Action<ThreatReport> OnThreatEvaluated;
@@ -164,6 +256,9 @@ public class ThreatAssessment : MonoBehaviour
         Vector3 targetWaypoint = pathFollower.TargetWaypoint;
 
         ThreatReport highestReport = ThreatReport.Clear;
+        float effSafetyRadius = EffectiveSafetyRadius;
+        float effVerticalMargin = EffectiveVerticalSafetyMargin;
+        float effWarningRadius = EffectiveWarningRadius;
 
         for (int i = 0; i < obstacles.Count; i++)
         {
@@ -181,9 +276,9 @@ public class ThreatAssessment : MonoBehaviour
                 remainingWaypoints,
                 targetWaypoint,
                 obs,
-                safetyRadius,
+                effSafetyRadius,
                 lookaheadTime,
-                verticalSafetyMargin);
+                effVerticalMargin);
 
             bool hasValidCollision = prediction.WillCollide &&
                                     float.IsFinite(prediction.DistanceToCollision) &&
@@ -194,11 +289,11 @@ public class ThreatAssessment : MonoBehaviour
 
             if (hasValidCollision)
             {
-                if (prediction.CrossTrackDistance <= safetyRadius || prediction.TimeToCollision <= lookaheadTime)
+                if (prediction.CrossTrackDistance <= effSafetyRadius || prediction.TimeToCollision <= lookaheadTime)
                 {
                     evaluatedLevel = ThreatLevel.Critical;
                 }
-                else if (prediction.CrossTrackDistance <= warningRadius)
+                else if (prediction.CrossTrackDistance <= effWarningRadius)
                 {
                     evaluatedLevel = ThreatLevel.Warning;
                 }
@@ -210,9 +305,9 @@ public class ThreatAssessment : MonoBehaviour
             else
             {
                 // No direct collision projected within lookahead window
-                bool isVerticallyClear = prediction.VerticalSeparation >= verticalSafetyMargin;
+                bool isVerticallyClear = prediction.VerticalSeparation >= effVerticalMargin;
 
-                if (!isVerticallyClear && float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= warningRadius)
+                if (!isVerticallyClear && float.IsFinite(prediction.CrossTrackDistance) && prediction.CrossTrackDistance <= effWarningRadius)
                 {
                     evaluatedLevel = ThreatLevel.Warning;
                 }

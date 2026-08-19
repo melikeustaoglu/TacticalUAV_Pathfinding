@@ -221,6 +221,18 @@ public class ReplanningController : MonoBehaviour
         if (Time.time - lastReplanTime < replanCooldown)
             return false;
 
+        // Fail-Safe: If onboard state estimator has failed, halt flight and enter Safe Hold
+        if (stateProvider != null && stateProvider.CurrentState.Status == EstimatorStatus.Failed)
+        {
+            pathFollower.StopFollowing();
+            SetState(NavigationState.NoSafePath);
+            latestDecisionReason = TacticalDecisionReason.NoSafePathHold;
+            noSafePathHolds++;
+            OnNoSafePathFound?.Invoke();
+            OnTacticalDecisionMade?.Invoke(latestDecisionReason, "Estimator failed; entering Stage 4 Safe Hold");
+            return false;
+        }
+
         int currentActiveCount = threatAssessment != null && threatAssessment.ActiveThreatReports != null
             ? threatAssessment.ActiveThreatReports.Count
             : 0;
@@ -363,7 +375,8 @@ public class ReplanningController : MonoBehaviour
 
         // Collect active dynamic hazards to avoid simultaneously (bounded to top 5)
         List<DynamicHazard> compoundHazards = new List<DynamicHazard>(8);
-        float baseBuffer = threatAssessment != null ? threatAssessment.SafetyRadius + 1.2f : 2.2f;
+        float effSafetyRadius = threatAssessment != null ? threatAssessment.EffectiveSafetyRadius : 1.0f;
+        float baseBuffer = effSafetyRadius + 1.2f;
 
         if (threatAssessment != null && threatAssessment.ActiveThreatReports != null && threatAssessment.ActiveThreatReports.Count > 0)
         {
@@ -606,7 +619,8 @@ public class ReplanningController : MonoBehaviour
             return false;
 
         Vector3 uavPos = GetEstimatedPosition();
-        float combinedRadius = threatAssessment != null ? threatAssessment.SafetyRadius + 0.5f : 1.5f;
+        float effSafetyRadius = threatAssessment != null ? threatAssessment.EffectiveSafetyRadius : 1.0f;
+        float combinedRadius = effSafetyRadius + 0.5f;
 
         // 1. Gather all active dynamic threats to evaluate (bounded to top 5)
         List<ThreatReport> dynamicThreats = new List<ThreatReport>(8);
@@ -737,7 +751,7 @@ public class ReplanningController : MonoBehaviour
         float maxAltitude = pathFollower.MaxFlightAltitude;
         float maxClimbRate = pathFollower.MaxClimbRate;
         float maxDescentRate = pathFollower.MaxDescentRate;
-        float verticalSafetyMargin = threatAssessment != null ? threatAssessment.VerticalSafetyMargin : 0.5f;
+        float verticalSafetyMargin = threatAssessment != null ? threatAssessment.EffectiveVerticalSafetyMargin : 0.5f;
 
         // 1. Determine primary obstacle top ceiling
         float primaryTopY = primaryReport.ThreateningObstacle.GameObject != null && primaryReport.ThreateningObstacle.Collider != null
