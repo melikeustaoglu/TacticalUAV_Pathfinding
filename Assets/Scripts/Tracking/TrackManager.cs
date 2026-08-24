@@ -42,6 +42,13 @@ public class TrackManager : MonoBehaviour
         public float Confidence;
         public Vector3 EstimatedExtents;
 
+        // Phase A Corroboration & Metrics
+        public int CorroboratingModalityMask;
+        public float LastLidarDetectionTime;
+        public float LastRadarDetectionTime;
+        public float LatestDetectionConfidence;
+        public bool WasUpdatedInCurrentCycle;
+
         public TrackRecord()
         {
             Tracker = new TargetTracker();
@@ -59,6 +66,11 @@ public class TrackManager : MonoBehaviour
             ScanHistory = 0;
             Confidence = 0f;
             EstimatedExtents = Vector3.one;
+            CorroboratingModalityMask = 0;
+            LastLidarDetectionTime = -10f;
+            LastRadarDetectionTime = -10f;
+            LatestDetectionConfidence = 0.90f;
+            WasUpdatedInCurrentCycle = false;
         }
 
         public int CountHistoryHits()
@@ -79,6 +91,7 @@ public class TrackManager : MonoBehaviour
     private readonly int[] trackMatches = new int[MaxTracks];
     private readonly int[] detectionMatches = new int[MaxTracks];
     private readonly TrackedTarget[] publishedTargets = new TrackedTarget[MaxTracks];
+    private readonly TargetDetection[] modalityDetections = new TargetDetection[MaxBufferedDetections];
 
     private readonly DataAssociation dataAssociation = new DataAssociation();
 
@@ -399,7 +412,75 @@ public class TrackManager : MonoBehaviour
 
     /// <summary>
     /// Processes a batch of TargetDetections from onboard sensors (LiDAR, Radar) at the specified timestamp.
-    /// Runs Prediction -> GNN Association -> Kalman Updates -> Lifecycle Transitions -> Target Publishing.
+    public const float CorroborationWindowSeconds = 0.50f;
+
+    /// <summary>
+    /// Computes the composite track confidence score C_track in [0.0, 1.0] from physical observables:
+    /// 1. Sensor Modality Corroboration (dual-sensor LiDAR+Radar = 1.0, single-sensor = 0.65, coasting = 0.35)
+    /// 2. Sensor Detection Quality (instantaneous detection confidence)
+    /// 3. Measurement Hit Consistency (hits / opportunities in 5-scan sliding window)
+    /// 4. Spatial Uncertainty / Covariance Convergence (1 / (1 + sigma_pos))
+    /// Weighted sum: w_corrob=0.40, w_quality=0.25, w_hist=0.20, w_cov=0.15.
+    /// </summary>
+    public static float ComputeCompositeConfidence(TrackRecord track, float currentTime)
+    {
+        if (track == null || track.Status == TrackStatus.Deleted)
+        {
+            return 0f;
+        }
+
+        // 1. Modality Corroboration Factor (fCorrob)
+        bool lidarActive = (currentTime - track.LastLidarDetectionTime) <= CorroborationWindowSeconds;
+        bool radarActive = (currentTime - track.LastRadarDetectionTime) <= CorroborationWindowSeconds;
+
+        float fCorrob;
+        if (lidarActive && radarActive)
+        {
+            fCorrob = 1.0f; // Dual-sensor verified
+        }
+        else if (lidarActive || radarActive)
+        {
+            fCorrob = 0.65f; // Single-sensor active
+        }
+        else
+        {
+            fCorrob = 0.35f; // Coasting / no recent sensor hits
+        }
+
+        // 2. Sensor Detection Quality Factor (fQuality)
+        float fQuality = Mathf.Clamp01(track.LatestDetectionConfidence);
+
+        // 3. Hit Consistency Factor (fHist, 5-scan sliding window)
+        int hits = track.CountHistoryHits();
+        float fHist = Mathf.Clamp01(hits / 5.0f);
+        if (track.Status == TrackStatus.Tentative && hits < 3)
+        {
+            fHist = Mathf.Max(0.20f, hits / 5.0f);
+        }
+
+        // 4. Uncertainty / Covariance Factor (fCov)
+        float posStdDev = track.Tracker != null ? track.Tracker.HorizontalPositionStdDev : 1.0f;
+        float fCov = 1.0f / (1.0f + Mathf.Max(0f, posStdDev));
+
+        // 5. Composite Weighted Sum: w_corrob=0.40, w_quality=0.25, w_hist=0.20, w_cov=0.15
+        float composite = 0.40f * fCorrob + 0.25f * fQuality + 0.20f * fHist + 0.15f * fCov;
+
+        if (track.Status == TrackStatus.Coasting)
+        {
+            composite *= 0.85f;
+        }
+        else if (track.Status == TrackStatus.Lost)
+        {
+            composite *= 0.50f;
+        }
+
+        return Mathf.Clamp01(composite);
+    }
+
+    /// <summary>
+    /// Processes a batch of TargetDetections from onboard sensors (LiDAR, Radar) at the specified timestamp.
+    /// Runs Multi-Modality Sequential Association -> Kalman Updates -> Lifecycle Transitions -> Target Publishing.
+    /// Eliminates ghost tracks when multiple sensors observe the same target simultaneously.
     /// </summary>
     public void ProcessDetections(TargetDetection[] detections, int detectionCount, float currentTime)
     {
@@ -409,7 +490,13 @@ public class TrackManager : MonoBehaviour
         }
 
         lastProcessTime = currentTime;
-        int m = Mathf.Min(detectionCount, MaxTracks);
+        int m = Mathf.Min(detectionCount, MaxBufferedDetections);
+
+        // Reset per-cycle update flags on all active tracks
+        for (int i = 0; i < activeTrackCount; i++)
+        {
+            trackPool[i].WasUpdatedInCurrentCycle = false;
+        }
 
         // 1. Predict all active tracks to current timestamp
         for (int i = 0; i < activeTrackCount; i++)
@@ -417,55 +504,135 @@ public class TrackManager : MonoBehaviour
             trackPool[i].Tracker.Predict(currentTime);
         }
 
-        // 2. Sort active tracks by TrackId deterministically before association
-        SortActiveTracksDeterministic();
+        // 2. Process detections partitioned by sensor modality sequentially
+        for (int mod = 0; mod <= (int)TargetSensorModality.ElectroOptical; mod++)
+        {
+            TargetSensorModality currentModality = (TargetSensorModality)mod;
 
-        // 3. Perform Global Mahalanobis Data Association
-        dataAssociation.Associate(
-            trackerPointers,
-            activeTrackCount,
-            detections,
-            m,
-            trackMatches,
-            detectionMatches);
+            // Collect detections belonging to currentModality
+            int modalityCount = 0;
+            for (int d = 0; d < m; d++)
+            {
+                if (detections[d].IsValid && detections[d].Modality == currentModality)
+                {
+                    modalityDetections[modalityCount++] = detections[d];
+                }
+            }
 
-        // 4. Update Matched Tracks & Coast Unmatched Tracks
+            if (modalityCount == 0)
+            {
+                continue; // No detections for this modality
+            }
+
+            // Predict active tracks to current timestamp (ensures newly spawned tracks from earlier passes are at currentTime)
+            for (int i = 0; i < activeTrackCount; i++)
+            {
+                trackPool[i].Tracker.Predict(currentTime);
+            }
+
+            // Sort active tracks deterministically before association
+            SortActiveTracksDeterministic();
+
+            // Perform Hungarian Data Association for this modality
+            dataAssociation.Associate(
+                trackerPointers,
+                activeTrackCount,
+                modalityDetections,
+                modalityCount,
+                trackMatches,
+                detectionMatches);
+
+            // Update matched tracks with this modality's measurements
+            for (int i = 0; i < activeTrackCount; i++)
+            {
+                TrackRecord track = trackPool[i];
+                int matchDetIdx = trackMatches[i];
+
+                if (matchDetIdx >= 0 && matchDetIdx < modalityCount)
+                {
+                    TargetDetection matchedDet = modalityDetections[matchDetIdx];
+
+                    if (matchedDet.Timestamp >= track.LastUpdateTime - 0.0001f)
+                    {
+                        track.Tracker.Update(matchedDet);
+                        track.LastUpdateTime = matchedDet.Timestamp;
+                        track.ConsecutiveMisses = 0;
+                        track.WasUpdatedInCurrentCycle = true;
+                        track.LatestDetectionConfidence = matchedDet.Confidence;
+
+                        if (matchedDet.Modality == TargetSensorModality.LiDAR)
+                        {
+                            track.LastLidarDetectionTime = matchedDet.Timestamp;
+                        }
+                        else if (matchedDet.Modality == TargetSensorModality.Radar)
+                        {
+                            track.LastRadarDetectionTime = matchedDet.Timestamp;
+                        }
+                        track.CorroboratingModalityMask |= (1 << (int)matchedDet.Modality);
+                    }
+                }
+            }
+
+            // Initialize new tentative tracks from unassigned detections of this modality
+            for (int j = 0; j < modalityCount; j++)
+            {
+                if (detectionMatches[j] == -1 && activeTrackCount < MaxTracks)
+                {
+                    TargetDetection unassignedDet = modalityDetections[j];
+                    if (unassignedDet.IsValid)
+                    {
+                        int newTrackId = nextTrackId++;
+                        TrackRecord newTrack = trackPool[activeTrackCount];
+                        newTrack.Reset(newTrackId);
+                        newTrack.Tracker.Initialize(unassignedDet);
+                        newTrack.Status = TrackStatus.Tentative;
+                        newTrack.FirstDetectionTime = currentTime;
+                        newTrack.LastUpdateTime = unassignedDet.Timestamp;
+                        newTrack.ConsecutiveMisses = 0;
+                        newTrack.ScanHistory = 1;
+                        newTrack.WasUpdatedInCurrentCycle = true;
+                        newTrack.LatestDetectionConfidence = unassignedDet.Confidence;
+
+                        if (unassignedDet.Modality == TargetSensorModality.LiDAR)
+                        {
+                            newTrack.LastLidarDetectionTime = unassignedDet.Timestamp;
+                        }
+                        else if (unassignedDet.Modality == TargetSensorModality.Radar)
+                        {
+                            newTrack.LastRadarDetectionTime = unassignedDet.Timestamp;
+                        }
+                        newTrack.CorroboratingModalityMask = (1 << (int)unassignedDet.Modality);
+
+                        activeTrackCount++;
+                    }
+                }
+            }
+        }
+
+        // 3. Lifecycle Transitions & Composite Confidence Calculation
         for (int i = 0; i < activeTrackCount; i++)
         {
             TrackRecord track = trackPool[i];
-            int matchDetIdx = trackMatches[i];
 
-            if (matchDetIdx >= 0 && matchDetIdx < m)
+            if (track.WasUpdatedInCurrentCycle)
             {
-                TargetDetection matchedDet = detections[matchDetIdx];
+                track.ScanHistory = ((track.ScanHistory << 1) | 1) & 0x1F;
 
-                // Check for stale measurement
-                if (matchedDet.Timestamp >= track.LastUpdateTime - 0.0001f)
+                if (track.Status == TrackStatus.Tentative)
                 {
-                    track.Tracker.Update(matchedDet);
-                    track.LastUpdateTime = matchedDet.Timestamp;
-                    track.ConsecutiveMisses = 0;
-                    track.ScanHistory = ((track.ScanHistory << 1) | 1) & 0x1F;
-                    track.Confidence = matchedDet.Confidence;
-
-                    // Lifecycle promotion rules
-                    if (track.Status == TrackStatus.Tentative)
+                    if (track.CountHistoryHits() >= promotionHitsRequired)
                     {
-                        if (track.CountHistoryHits() >= promotionHitsRequired)
-                        {
-                            track.Status = TrackStatus.Confirmed;
-                        }
-                    }
-                    else if (track.Status == TrackStatus.Coasting || track.Status == TrackStatus.Lost)
-                    {
-                        // Reacquisition within coasting window restores Confirmed
                         track.Status = TrackStatus.Confirmed;
                     }
+                }
+                else if (track.Status == TrackStatus.Coasting || track.Status == TrackStatus.Lost)
+                {
+                    track.Status = TrackStatus.Confirmed;
                 }
             }
             else
             {
-                // Unmatched track -> Missed scan
+                // Unmatched in this entire evaluation cycle
                 track.ConsecutiveMisses++;
                 track.ScanHistory = (track.ScanHistory << 1) & 0x1F;
 
@@ -473,7 +640,6 @@ public class TrackManager : MonoBehaviour
 
                 if (track.Status == TrackStatus.Tentative)
                 {
-                    // Tentative tracks deleted after 2 consecutive missed scans
                     if (track.ConsecutiveMisses >= 2)
                     {
                         track.Status = TrackStatus.Deleted;
@@ -505,36 +671,27 @@ public class TrackManager : MonoBehaviour
                     }
                 }
             }
-        }
 
-        // 5. Initialize new Tentative Tracks from Unmatched Detections
-        for (int j = 0; j < m; j++)
-        {
-            if (detectionMatches[j] == -1 && activeTrackCount < MaxTracks)
+            // Update active corroboration mask based on active corroboration window
+            int activeMask = 0;
+            if ((currentTime - track.LastLidarDetectionTime) <= CorroborationWindowSeconds)
             {
-                TargetDetection unassignedDet = detections[j];
-                if (unassignedDet.IsValid)
-                {
-                    int newTrackId = nextTrackId++;
-                    TrackRecord newTrack = trackPool[activeTrackCount];
-                    newTrack.Reset(newTrackId);
-                    newTrack.Tracker.Initialize(unassignedDet);
-                    newTrack.Status = TrackStatus.Tentative;
-                    newTrack.FirstDetectionTime = currentTime;
-                    newTrack.LastUpdateTime = unassignedDet.Timestamp;
-                    newTrack.ConsecutiveMisses = 0;
-                    newTrack.ScanHistory = 1;
-                    newTrack.Confidence = unassignedDet.Confidence;
-
-                    activeTrackCount++;
-                }
+                activeMask |= (1 << (int)TargetSensorModality.LiDAR);
             }
+            if ((currentTime - track.LastRadarDetectionTime) <= CorroborationWindowSeconds)
+            {
+                activeMask |= (1 << (int)TargetSensorModality.Radar);
+            }
+            track.CorroboratingModalityMask = activeMask;
+
+            // Compute composite track confidence
+            track.Confidence = ComputeCompositeConfidence(track, currentTime);
         }
 
-        // 6. Prune Deleted Tracks & Compact Active Array in-place
+        // 4. Prune Deleted Tracks & Compact Active Array in-place
         PruneDeletedTracks();
 
-        // 7. Publish Confirmed & Active Tracks to output buffer
+        // 5. Publish Confirmed & Active Tracks to output buffer
         PublishTrackedTargets(currentTime);
     }
 
@@ -599,7 +756,8 @@ public class TrackManager : MonoBehaviour
                 age,
                 timeSinceUpdate,
                 trk.Confidence,
-                trk.EstimatedExtents);
+                trk.EstimatedExtents,
+                trk.CorroboratingModalityMask);
         }
 
         OnTracksUpdated?.Invoke(publishedTargets, activeTrackCount);

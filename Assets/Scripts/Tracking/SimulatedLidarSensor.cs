@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -169,12 +169,14 @@ public class SimulatedLidarSensor : MonoBehaviour, ITargetSensor
                     Vector3 measuredPos = hit.point + posNoise;
                     Vector3 posVariance = Vector3.one * (positionNoiseSigma * positionNoiseSigma);
 
+                    float dynamicConfidence = (health == SensorHealth.Degraded) ? detectionConfidence * 0.70f : detectionConfidence;
+
                     internalBuffer[detectionCount] = new TargetDetection(
                         TargetSensorModality.LiDAR,
                         simulationTime,
                         measuredPos,
                         posVariance,
-                        detectionConfidence,
+                        dynamicConfidence,
                         nextDetectionId++,
                         Vector3.zero,
                         Vector3.zero,

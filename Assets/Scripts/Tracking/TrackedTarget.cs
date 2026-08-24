@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -39,6 +39,11 @@ public readonly struct TrackedTarget : IEquatable<TrackedTarget>
     public float TimeSinceLastUpdate { get; }
     public float Confidence { get; }
     public Vector3 EstimatedExtents { get; }
+    public int CorroboratingModalityMask { get; }
+
+    public bool IsDualSensorCorroborated =>
+        (CorroboratingModalityMask & (1 << (int)TargetSensorModality.LiDAR)) != 0 &&
+        (CorroboratingModalityMask & (1 << (int)TargetSensorModality.Radar)) != 0;
 
     public float HorizontalPositionStdDev => Mathf.Sqrt(Mathf.Max(PositionVariance.x, PositionVariance.z));
     public float VerticalPositionStdDev => Mathf.Sqrt(Mathf.Max(0f, PositionVariance.y));
@@ -48,7 +53,7 @@ public readonly struct TrackedTarget : IEquatable<TrackedTarget>
 
     public static readonly TrackedTarget Empty = new TrackedTarget(
         -1, Vector3.zero, Vector3.zero, Vector3.one * 9999f, Vector3.one * 9999f,
-        TrackStatus.Deleted, 0f, 0f, 0f, Vector3.one);
+        TrackStatus.Deleted, 0f, 0f, 0f, Vector3.one, 0);
 
     public TrackedTarget(
         int trackId,
@@ -60,7 +65,8 @@ public readonly struct TrackedTarget : IEquatable<TrackedTarget>
         float age,
         float timeSinceLastUpdate,
         float confidence,
-        Vector3 estimatedExtents)
+        Vector3 estimatedExtents,
+        int corroboratingModalityMask = 0)
     {
         TrackId = trackId;
         EstimatedPosition = estimatedPosition;
@@ -72,6 +78,7 @@ public readonly struct TrackedTarget : IEquatable<TrackedTarget>
         TimeSinceLastUpdate = Mathf.Max(0f, timeSinceLastUpdate);
         Confidence = Mathf.Clamp01(confidence);
         EstimatedExtents = estimatedExtents;
+        CorroboratingModalityMask = corroboratingModalityMask;
     }
 
     public bool Equals(TrackedTarget other)

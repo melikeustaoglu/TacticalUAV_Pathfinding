@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -194,12 +194,14 @@ public class SimulatedRadarSensor : MonoBehaviour, ITargetSensor
                     Vector3 posVariance = Vector3.one * (positionNoiseSigma * positionNoiseSigma);
                     Vector3 velVariance = Vector3.one * (velocityNoiseSigma * velocityNoiseSigma);
 
+                    float dynamicConfidence = (health == SensorHealth.Degraded) ? detectionConfidence * 0.70f : detectionConfidence;
+
                     internalBuffer[detectionCount] = new TargetDetection(
                         TargetSensorModality.Radar,
                         simulationTime,
                         measuredPos,
                         posVariance,
-                        detectionConfidence,
+                        dynamicConfidence,
                         nextDetectionId++,
                         measuredVel,
                         velVariance,
