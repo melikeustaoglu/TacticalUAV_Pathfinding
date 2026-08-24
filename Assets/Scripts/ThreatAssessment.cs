@@ -28,6 +28,9 @@ public struct ThreatReport
     public float DistanceToCollision { get; }
     public float TimeToCollision { get; }
     public int ObstructedWaypointIndex { get; }
+    public float PriorityScore { get; }
+    public float ClosingVelocity { get; }
+    public float DistanceAtCpa { get; }
 
     public ThreatReport(
         ThreatLevel threatLevel,
@@ -35,7 +38,10 @@ public struct ThreatReport
         Vector3 estimatedCollisionPoint,
         float distanceToCollision,
         float timeToCollision,
-        int obstructedWaypointIndex)
+        int obstructedWaypointIndex,
+        float priorityScore = 0f,
+        float closingVelocity = 0f,
+        float distanceAtCpa = 0f)
     {
         ThreatLevel = threatLevel;
         ThreateningObstacle = threateningObstacle;
@@ -44,6 +50,9 @@ public struct ThreatReport
         DistanceToCollision = distanceToCollision;
         TimeToCollision = timeToCollision;
         ObstructedWaypointIndex = obstructedWaypointIndex;
+        PriorityScore = Mathf.Clamp01(priorityScore);
+        ClosingVelocity = closingVelocity;
+        DistanceAtCpa = Mathf.Max(0f, distanceAtCpa);
     }
 
     public ThreatReport(
@@ -52,7 +61,10 @@ public struct ThreatReport
         Vector3 estimatedCollisionPoint,
         float distanceToCollision,
         float timeToCollision,
-        int obstructedWaypointIndex)
+        int obstructedWaypointIndex,
+        float priorityScore = 0f,
+        float closingVelocity = 0f,
+        float distanceAtCpa = 0f)
     {
         ThreatLevel = threatLevel;
         ThreateningTrack = threateningTrack;
@@ -71,6 +83,9 @@ public struct ThreatReport
         DistanceToCollision = distanceToCollision;
         TimeToCollision = timeToCollision;
         ObstructedWaypointIndex = obstructedWaypointIndex;
+        PriorityScore = Mathf.Clamp01(priorityScore);
+        ClosingVelocity = closingVelocity;
+        DistanceAtCpa = Mathf.Max(0f, distanceAtCpa);
     }
 
     public static ThreatReport Clear => new ThreatReport(
@@ -79,7 +94,10 @@ public struct ThreatReport
         Vector3.zero,
         float.PositiveInfinity,
         float.PositiveInfinity,
-        -1);
+        -1,
+        0f,
+        0f,
+        float.PositiveInfinity);
 }
 
 /// <summary>
@@ -305,6 +323,77 @@ public class ThreatAssessment : MonoBehaviour
     }
 
     /// <summary>
+    /// Computes the composite threat priority score P_threat in [0.0, 1.0] from physical kinematics
+    /// and track corroboration confidence, with strict discrete ThreatLevel band partitioning:
+    /// - Critical: [0.70, 1.00]
+    /// - Warning:  [0.40, 0.65]
+    /// - Advisory: [0.15, 0.35]
+    /// - None:     0.00
+    /// </summary>
+    public static float ComputeThreatPriority(
+        ThreatLevel level,
+        float ttc,
+        float dCpa,
+        float distance,
+        float closingVel,
+        float trackConfidence,
+        float effSafetyRadius,
+        float effWarningRadius,
+        float lookaheadTime = 4.5f,
+        float cruiseSpeed = 2.0f)
+    {
+        if (level == ThreatLevel.None)
+            return 0f;
+
+        float pBase;
+        float pBand;
+        switch (level)
+        {
+            case ThreatLevel.Critical:
+                pBase = 0.70f;
+                pBand = 0.30f;
+                break;
+            case ThreatLevel.Warning:
+                pBase = 0.40f;
+                pBand = 0.25f;
+                break;
+            case ThreatLevel.Advisory:
+                pBase = 0.15f;
+                pBand = 0.20f;
+                break;
+            default:
+                return 0f;
+        }
+
+        // 1. [DERIVED]: Temporal urgency factor: f_TTC = 1 / (1 + TTC / T_lookahead)
+        float fTtc = float.IsFinite(ttc) && ttc >= 0f
+            ? 1.0f / (1.0f + ttc / Mathf.Max(0.1f, lookaheadTime))
+            : 0.0f;
+
+        // 2. [DERIVED]: Spatial miss factor: f_CPA = 1 / (1 + max(0, d_CPA - R_eff) / (R_warn - R_eff))
+        float excessMiss = float.IsFinite(dCpa) ? Mathf.Max(0f, dCpa - effSafetyRadius) : 10f;
+        float warnMargin = Mathf.Max(0.1f, effWarningRadius - effSafetyRadius);
+        float fCpa = 1.0f / (1.0f + excessMiss / warnMargin);
+
+        // 3. [DERIVED]: Proximity factor: f_dist = 1 / (1 + D / 10.0)
+        float fDist = float.IsFinite(distance) && distance >= 0f
+            ? 1.0f / (1.0f + distance / 10.0f)
+            : 0.0f;
+
+        // 4. [DERIVED]: Closing velocity factor: f_vel = max(0, v_closing) / (max(0, v_closing) + V_cruise)
+        float nonNegClosing = Mathf.Max(0f, closingVel);
+        float fVel = (nonNegClosing > 1e-4f)
+            ? nonNegClosing / (nonNegClosing + Mathf.Max(0.1f, cruiseSpeed))
+            : 0.0f;
+
+        // [DESIGN]: Weighted continuous kinematic urgency score: S_kin in [0.0, 1.0]
+        float sKin = (0.40f * fTtc + 0.25f * fCpa + 0.20f * fDist + 0.15f * fVel) * Mathf.Clamp(trackConfidence, 0.40f, 1.0f);
+
+        float pThreat = pBase + pBand * Mathf.Clamp01(sKin);
+        return Mathf.Clamp01(pThreat);
+    }
+
+    /// <summary>
     /// Evaluates a collection of TrackedTarget estimates against the UAV's flight trajectory,
     /// combining UAV ego uncertainty with target position uncertainty.
     /// </summary>
@@ -340,6 +429,7 @@ public class ThreatAssessment : MonoBehaviour
             ? stateProvider.CurrentState.VerticalPositionStandardDeviation
             : 0f;
 
+        float nominalSpeed = pathFollower != null ? pathFollower.MoveSpeed : 2.0f;
         ThreatReport highestReport = ThreatReport.Clear;
 
         for (int i = 0; i < count; i++)
@@ -378,6 +468,8 @@ public class ThreatAssessment : MonoBehaviour
 
             float ttc = float.PositiveInfinity;
             float distanceToCollision = distance;
+            float distanceAtCpa = distance;
+            float closingVelocity = (distance > 0.01f) ? -Vector3.Dot(toTarget.normalized, vRel) : 0f;
             Vector3 collisionPoint = Vector3.zero;
             ThreatLevel level = ThreatLevel.None;
 
@@ -387,6 +479,7 @@ public class ThreatAssessment : MonoBehaviour
                 level = ThreatLevel.Critical;
                 ttc = 0f;
                 distanceToCollision = distance;
+                distanceAtCpa = distance;
                 collisionPoint = target.EstimatedPosition;
             }
             else if (vRelSq > 1e-6f)
@@ -398,6 +491,7 @@ public class ThreatAssessment : MonoBehaviour
                 {
                     Vector3 pCpa = toTarget + vRel * tCpa;
                     float dCpa = pCpa.magnitude;
+                    distanceAtCpa = dCpa;
                     float vertSeparationCpa = Mathf.Abs(pCpa.y);
 
                     if (dCpa <= effSafetyRadius && vertSeparationCpa <= effVerticalMargin && tCpa <= lookaheadTime)
@@ -446,34 +540,47 @@ public class ThreatAssessment : MonoBehaviour
                 }
             }
 
+            float trackConf = target.Confidence > 0.01f ? target.Confidence : 1.0f;
+            float priority = ComputeThreatPriority(
+                level,
+                ttc,
+                distanceAtCpa,
+                distanceToCollision,
+                closingVelocity,
+                trackConf,
+                effSafetyRadius,
+                effWarningRadius,
+                lookaheadTime,
+                nominalSpeed);
+
             ThreatReport report = new ThreatReport(
                 level,
                 target,
                 collisionPoint,
                 distanceToCollision,
                 ttc,
-                0);
+                0,
+                priority,
+                closingVelocity,
+                distanceAtCpa);
 
             allEvaluatedReports.Add(report);
             if (level >= ThreatLevel.Warning)
             {
                 activeThreatReports.Add(report);
             }
-
-            // Deterministic Multi-Target Selection: Severity > TTC > Distance > TrackId
-            if (IsMoreSevereThreat(report, highestReport))
-            {
-                highestReport = report;
-            }
         }
 
-        // Sort active threats deterministically
+        // Sort active threats deterministically by PriorityScore descending
         if (activeThreatReports.Count > 1)
         {
             activeThreatReports.Sort((a, b) =>
             {
                 int sev = b.ThreatLevel.CompareTo(a.ThreatLevel);
                 if (sev != 0) return sev;
+
+                int prioComp = b.PriorityScore.CompareTo(a.PriorityScore);
+                if (prioComp != 0) return prioComp;
 
                 int ttcComp = a.TimeToCollision.CompareTo(b.TimeToCollision);
                 if (ttcComp != 0) return ttcComp;
@@ -485,40 +592,70 @@ public class ThreatAssessment : MonoBehaviour
             });
         }
 
-        currentReport = highestReport;
+        ThreatReport bestCandidate = activeThreatReports.Count > 0 ? activeThreatReports[0] : ThreatReport.Clear;
+
+        // Apply temporal hysteresis against previous frame's focused threat
+        if (currentReport.ThreatLevel == ThreatLevel.None ||
+            !IsReportStillActive(currentReport, activeThreatReports) ||
+            IsMoreSevereThreat(bestCandidate, currentReport))
+        {
+            currentReport = bestCandidate;
+        }
+        else
+        {
+            // Retain existing focus, but update its latest telemetry from active reports
+            int existingIndex = FindReportIndex(currentReport, activeThreatReports);
+            if (existingIndex >= 0)
+            {
+                currentReport = activeThreatReports[existingIndex];
+            }
+        }
+
         NotifyThreatState();
+    }
+
+    private static bool IsReportStillActive(ThreatReport report, List<ThreatReport> activeList)
+    {
+        if (report.ThreatLevel == ThreatLevel.None || activeList == null || activeList.Count == 0)
+            return false;
+
+        for (int i = 0; i < activeList.Count; i++)
+        {
+            if (report.HasTrack && activeList[i].HasTrack && report.ThreateningTrack.TrackId == activeList[i].ThreateningTrack.TrackId)
+                return true;
+            if (!report.HasTrack && report.ThreateningObstacle.GameObject != null && report.ThreateningObstacle.GameObject == activeList[i].ThreateningObstacle.GameObject)
+                return true;
+        }
+        return false;
+    }
+
+    private static int FindReportIndex(ThreatReport report, List<ThreatReport> activeList)
+    {
+        if (activeList == null) return -1;
+        for (int i = 0; i < activeList.Count; i++)
+        {
+            if (report.HasTrack && activeList[i].HasTrack && report.ThreateningTrack.TrackId == activeList[i].ThreateningTrack.TrackId)
+                return i;
+            if (!report.HasTrack && report.ThreateningObstacle.GameObject != null && report.ThreateningObstacle.GameObject == activeList[i].ThreateningObstacle.GameObject)
+                return i;
+        }
+        return -1;
     }
 
     private static bool IsMoreSevereThreat(ThreatReport candidate, ThreatReport current)
     {
+        if (candidate.ThreatLevel == ThreatLevel.None) return false;
+        if (current.ThreatLevel == ThreatLevel.None) return true;
+
+        // 1. Strict discrete ThreatLevel dominance
         if (candidate.ThreatLevel > current.ThreatLevel) return true;
         if (candidate.ThreatLevel < current.ThreatLevel) return false;
-        if (candidate.ThreatLevel == ThreatLevel.None) return false;
 
-        // 1. TTC comparison
-        if (float.IsFinite(candidate.TimeToCollision) && !float.IsFinite(current.TimeToCollision)) return true;
-        if (!float.IsFinite(candidate.TimeToCollision) && float.IsFinite(current.TimeToCollision)) return false;
-        if (float.IsFinite(candidate.TimeToCollision) && float.IsFinite(current.TimeToCollision))
-        {
-            if (candidate.TimeToCollision < current.TimeToCollision - 0.001f) return true;
-            if (candidate.TimeToCollision > current.TimeToCollision + 0.001f) return false;
-        }
+        // 2. Continuous Priority Score with Hysteresis (Delta = 0.05)
+        // Candidate must exceed current priority by at least 0.05 to trigger rank switch
+        if (candidate.PriorityScore > current.PriorityScore + 0.05f) return true;
 
-        // 2. Distance comparison
-        if (float.IsFinite(candidate.DistanceToCollision) && !float.IsFinite(current.DistanceToCollision)) return true;
-        if (!float.IsFinite(candidate.DistanceToCollision) && float.IsFinite(current.DistanceToCollision)) return false;
-        if (float.IsFinite(candidate.DistanceToCollision) && float.IsFinite(current.DistanceToCollision))
-        {
-            if (candidate.DistanceToCollision < current.DistanceToCollision - 0.001f) return true;
-            if (candidate.DistanceToCollision > current.DistanceToCollision + 0.001f) return false;
-        }
-
-        // 3. TrackId tie-breaker
-        if (candidate.HasTrack && current.HasTrack)
-        {
-            return candidate.ThreateningTrack.TrackId < current.ThreateningTrack.TrackId;
-        }
-
+        // Otherwise retain currently focused threat to prevent oscillation on similar risk
         return false;
     }
 
@@ -607,13 +744,33 @@ public class ThreatAssessment : MonoBehaviour
                 }
             }
 
+            float dist = prediction.DistanceToCollision;
+            float closingVel = (obs.IsDynamic && toObs.sqrMagnitude > 0.01f)
+                ? -Vector3.Dot(toObs.normalized, obs.Velocity - uavVelocity)
+                : (toObs.sqrMagnitude > 0.01f ? Vector3.Dot(toObs.normalized, uavVelocity) : 0f);
+
+            float priority = ComputeThreatPriority(
+                evaluatedLevel,
+                prediction.TimeToCollision,
+                prediction.CrossTrackDistance,
+                dist,
+                closingVel,
+                1.0f,
+                effSafetyRadius,
+                effWarningRadius,
+                lookaheadTime,
+                nominalSpeed);
+
             ThreatReport report = new ThreatReport(
                 evaluatedLevel,
                 obs,
                 prediction.EstimatedCollisionPoint,
                 prediction.DistanceToCollision,
                 prediction.TimeToCollision,
-                prediction.ObstructedWaypointIndex);
+                prediction.ObstructedWaypointIndex,
+                priority,
+                closingVel,
+                prediction.CrossTrackDistance);
 
             allEvaluatedReports.Add(report);
             if (evaluatedLevel >= ThreatLevel.Warning)
@@ -621,29 +778,24 @@ public class ThreatAssessment : MonoBehaviour
                 activeThreatReports.Add(report);
             }
 
-            if (evaluatedLevel > highestReport.ThreatLevel)
+            if (IsMoreSevereThreat(report, highestReport))
             {
                 highestReport = report;
-            }
-            else if (evaluatedLevel == highestReport.ThreatLevel && evaluatedLevel != ThreatLevel.None)
-            {
-                bool currentIsFinite = float.IsFinite(prediction.DistanceToCollision);
-                bool highestIsFinite = float.IsFinite(highestReport.DistanceToCollision);
-
-                if (currentIsFinite && !highestIsFinite)
-                {
-                    highestReport = report;
-                }
-                else if (currentIsFinite && highestIsFinite && prediction.DistanceToCollision < highestReport.DistanceToCollision)
-                {
-                    highestReport = report;
-                }
             }
         }
 
         if (activeThreatReports.Count > 1)
         {
-            activeThreatReports.Sort((a, b) => b.ThreatLevel.CompareTo(a.ThreatLevel));
+            activeThreatReports.Sort((a, b) =>
+            {
+                int sev = b.ThreatLevel.CompareTo(a.ThreatLevel);
+                if (sev != 0) return sev;
+
+                int prioComp = b.PriorityScore.CompareTo(a.PriorityScore);
+                if (prioComp != 0) return prioComp;
+
+                return a.DistanceToCollision.CompareTo(b.DistanceToCollision);
+            });
         }
 
         currentReport = highestReport;

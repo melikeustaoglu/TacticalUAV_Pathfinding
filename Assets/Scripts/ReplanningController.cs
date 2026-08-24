@@ -59,6 +59,7 @@ public class ReplanningController : MonoBehaviour
     public float LastReplanTime => lastReplanTime;
     public Vector3 LastReplanPosition => lastReplanPosition;
     public TacticalDecisionReason LatestDecisionReason => latestDecisionReason;
+    public ThreatReport PrimaryThreatReport => threatAssessment != null ? threatAssessment.CurrentThreatReport : ThreatReport.Clear;
 
     // Reactive Events for External Systems
     public event Action<NavigationState> OnStateChanged;
@@ -279,7 +280,11 @@ public class ReplanningController : MonoBehaviour
             return false;
         }
 
-        if (Time.time - lastReplanTime < replanCooldown)
+        bool isEmergencyPreemption = report.PriorityScore >= 0.85f &&
+                                    float.IsFinite(report.TimeToCollision) &&
+                                    report.TimeToCollision <= 1.5f;
+
+        if (!isEmergencyPreemption && (Time.time - lastReplanTime < replanCooldown))
             return false;
 
         // Fail-Safe: If onboard state estimator has failed, halt flight and enter Safe Hold
