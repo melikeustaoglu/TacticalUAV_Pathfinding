@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 
 /// <summary>
@@ -145,6 +145,12 @@ public struct EstimatedState
     /// <summary>Current GNSS / GPS satellite fix state.</summary>
     public GpsFixState GpsState { get; }
 
+    /// <summary>Composite navigation confidence score in [0.0, 1.0].</summary>
+    public float NavigationConfidence { get; }
+
+    /// <summary>Continuous elapsed time in seconds since the last accepted GPS measurement correction.</summary>
+    public float DeadReckoningDuration { get; }
+
     /// <summary>Whether this state estimate is mathematically valid and suitable for navigation.</summary>
     public bool IsValid => Status == EstimatorStatus.Nominal || Status == EstimatorStatus.Degraded;
 
@@ -160,7 +166,9 @@ public struct EstimatedState
         float yawVariance,
         float timestamp,
         EstimatorStatus status,
-        GpsFixState gpsState)
+        GpsFixState gpsState,
+        float navigationConfidence = 1.0f,
+        float deadReckoningDuration = 0f)
     {
         Position = position;
         Velocity = velocity;
@@ -174,6 +182,8 @@ public struct EstimatedState
         Timestamp = timestamp;
         Status = status;
         GpsState = gpsState;
+        NavigationConfidence = Mathf.Clamp01(navigationConfidence);
+        DeadReckoningDuration = Mathf.Max(0f, deadReckoningDuration);
     }
 
     /// <summary>
@@ -186,7 +196,9 @@ public struct EstimatedState
         float yawDegrees,
         float pitchDegrees = 0f,
         float timestamp = 0f,
-        float baselinePositionVariance = 0f)
+        float baselinePositionVariance = 0f,
+        float navigationConfidence = 1.0f,
+        float deadReckoningDuration = 0f)
     {
         return new EstimatedState(
             position,
@@ -200,7 +212,9 @@ public struct EstimatedState
             0f,
             timestamp,
             EstimatorStatus.Nominal,
-            GpsFixState.Fix3D);
+            GpsFixState.Fix3D,
+            navigationConfidence,
+            deadReckoningDuration);
     }
 
     /// <summary>
@@ -218,5 +232,7 @@ public struct EstimatedState
         9999f,
         0f,
         EstimatorStatus.Uninitialized,
-        GpsFixState.NoFix);
+        GpsFixState.NoFix,
+        0f,
+        0f);
 }

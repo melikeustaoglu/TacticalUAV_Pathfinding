@@ -15,6 +15,7 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
 
     private float lastPredictionTime = -1f;
     private float lastGpsCorrectionTime = -1f;
+    private float lastAcceptedGpsCorrectionTime = -1f;
     private float lastBaroCorrectionTime = -1f;
     private bool hasReceivedImu = false;
     private bool hasReceivedGps = false;
@@ -43,8 +44,11 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
     public float VerticalPositionStdDev => currentState.VerticalPositionStandardDeviation;
     public float VelocityStdDev => currentState.HorizontalVelocityStandardDeviation;
     public float YawStdDev => Mathf.Sqrt(Mathf.Max(0f, currentState.YawVariance));
+    public float NavigationConfidence => currentState.NavigationConfidence;
+    public float DeadReckoningDuration => currentState.DeadReckoningDuration;
     public float LastPredictionTime => lastPredictionTime;
     public float LastGpsCorrectionTime => lastGpsCorrectionTime;
+    public float LastAcceptedGpsCorrectionTime => lastAcceptedGpsCorrectionTime;
     public float LastBaroCorrectionTime => lastBaroCorrectionTime;
 
     public float GpsTimeoutThreshold
@@ -83,6 +87,7 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
         hasReceivedBaro = false;
         lastPredictionTime = -1f;
         lastGpsCorrectionTime = -1f;
+        lastAcceptedGpsCorrectionTime = -1f;
         lastBaroCorrectionTime = -1f;
     }
 
@@ -131,7 +136,11 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
         if (ekf == null) return;
         hasReceivedGps = true;
         lastGpsCorrectionTime = gps.Timestamp;
-        ekf.CorrectGps(gps);
+        bool accepted = ekf.CorrectGps(gps);
+        if (accepted)
+        {
+            lastAcceptedGpsCorrectionTime = gps.Timestamp;
+        }
         PublishState(gps.Timestamp);
     }
 
@@ -142,6 +151,61 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
         lastBaroCorrectionTime = baro.Timestamp;
         ekf.CorrectBaro(baro);
         PublishState(baro.Timestamp);
+    }
+
+    /// <summary>
+    /// Computes the composite navigation confidence score C_nav in [0.0, 1.0] from physical observables:
+    /// 1. GPS Availability (Fix3D/Differential = 1.00, Fix2D/Degraded = 0.70, NoFix = 0.35)
+    /// 2. Spatial Horizontal Uncertainty (1 / (1 + max(0, sigma_horiz - 0.15)))
+    /// 3. Dead-Reckoning Temporal Duration (1 / (1 + 0.20 * T_dr))
+    /// Weighted sum: w_gps=0.40, w_uncert=0.35, w_time=0.25, scaled by StatusModifier (Nominal=1.0, Degraded=0.85, Failed=0.0).
+    /// </summary>
+    public static float ComputeNavigationConfidence(
+        EstimatorStatus status,
+        GpsFixState gpsState,
+        float horizStdDev,
+        float deadReckoningDuration)
+    {
+        if (status == EstimatorStatus.Failed || status == EstimatorStatus.Uninitialized)
+        {
+            return 0f;
+        }
+
+        // 1. GPS Availability Factor (weight = 0.40)
+        float fGps;
+        switch (gpsState)
+        {
+            case GpsFixState.Differential:
+            case GpsFixState.Fix3D:
+                fGps = 1.00f;
+                break;
+            case GpsFixState.Fix2D:
+            case GpsFixState.Degraded:
+                fGps = 0.70f;
+                break;
+            case GpsFixState.NoFix:
+            default:
+                fGps = 0.35f;
+                break;
+        }
+
+        // 2. Spatial Horizontal Uncertainty Factor (weight = 0.35)
+        float excessSigma = Mathf.Max(0f, horizStdDev - 0.15f);
+        float fUncert = 1.0f / (1.0f + excessSigma);
+
+        // 3. Dead-Reckoning Temporal Factor (weight = 0.25)
+        float fTime = 1.0f / (1.0f + 0.20f * Mathf.Max(0f, deadReckoningDuration));
+
+        // Weighted composite sum
+        float composite = 0.40f * fGps + 0.35f * fUncert + 0.25f * fTime;
+
+        // Status modifier
+        if (status == EstimatorStatus.Degraded)
+        {
+            composite *= 0.85f;
+        }
+
+        return Mathf.Clamp01(composite);
     }
 
     public void PublishState(float timestamp)
@@ -173,6 +237,12 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
             }
         }
 
+        float drDuration = (lastAcceptedGpsCorrectionTime > 0f && timestamp >= lastAcceptedGpsCorrectionTime)
+            ? (timestamp - lastAcceptedGpsCorrectionTime)
+            : 0f;
+        float horizStdDev = baseState.HorizontalPositionStandardDeviation;
+        float navConfidence = ComputeNavigationConfidence(effectiveStatus, effectiveGps, horizStdDev, drDuration);
+
         currentState = new EstimatedState(
             baseState.Position,
             baseState.Velocity,
@@ -185,7 +255,9 @@ public class EkfStateProvider : MonoBehaviour, IEstimatedStateProvider
             baseState.YawVariance,
             timestamp,
             effectiveStatus,
-            effectiveGps);
+            effectiveGps,
+            navConfidence,
+            drDuration);
 
         OnStateEstimated?.Invoke(currentState);
     }
