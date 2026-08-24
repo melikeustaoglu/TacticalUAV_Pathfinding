@@ -183,6 +183,8 @@ public class ReplanningController : MonoBehaviour
         stateProvider = GetComponent<IEstimatedStateProvider>();
     }
 
+    public void SetStateProvider(IEstimatedStateProvider provider) => stateProvider = provider;
+
     private Vector3 GetEstimatedPosition()
     {
         return (stateProvider != null && stateProvider.IsEstimatorReady)

@@ -178,6 +178,69 @@ public class PathFollower : MonoBehaviour
         set => rotationSpeed = Mathf.Max(0f, value);
     }
 
+    [Header("Uncertainty-Aware Speed Parameters")]
+    [Tooltip("Nominal horizontal uncertainty threshold below which cruise speed is 100% (meters).")]
+    [SerializeField] private float nominalUncertaintyThreshold = 0.15f;
+
+    [Tooltip("Sensitivity coefficient for cruise speed scaling under horizontal position uncertainty.")]
+    [SerializeField] private float speedScaleSensitivity = 0.60f;
+
+    [Tooltip("Minimum allowable cruise speed scale under high uncertainty.")]
+    [SerializeField] private float minCruiseSpeedScale = 0.60f;
+
+    public float NominalUncertaintyThreshold
+    {
+        get => nominalUncertaintyThreshold;
+        set => nominalUncertaintyThreshold = Mathf.Max(0f, value);
+    }
+
+    public float SpeedScaleSensitivity
+    {
+        get => speedScaleSensitivity;
+        set => speedScaleSensitivity = Mathf.Max(0f, value);
+    }
+
+    public float MinCruiseSpeedScale
+    {
+        get => minCruiseSpeedScale;
+        set => minCruiseSpeedScale = Mathf.Clamp01(value);
+    }
+
+    /// <summary>
+    /// Effective cruise speed scale based on horizontal position uncertainty:
+    /// S_speed = clamp(1.0 - 0.60 * max(0, sigma_horiz - 0.15), 0.60, 1.0).
+    /// </summary>
+    public float UncertaintySpeedScale
+    {
+        get
+        {
+            if (stateProvider == null || !stateProvider.IsEstimatorReady)
+                return 1.0f;
+
+            float horizSigma = stateProvider.CurrentState.HorizontalPositionStandardDeviation;
+            float excessSigma = Mathf.Max(0f, horizSigma - nominalUncertaintyThreshold);
+            return Mathf.Clamp(1.0f - speedScaleSensitivity * excessSigma, minCruiseSpeedScale, 1.0f);
+        }
+    }
+
+    /// <summary>
+    /// Net effective cruise speed in m/s, accounting for base moveSpeed, uncertainty throttling, and tactical overrides.
+    /// </summary>
+    public float EffectiveCruiseSpeed
+    {
+        get
+        {
+            float baseCruise = moveSpeed * UncertaintySpeedScale;
+            if (IsSpeedOverrideActive)
+            {
+                return Mathf.Max(0.5f, baseCruise * speedOverrideRatio);
+            }
+            return baseCruise;
+        }
+    }
+
+    public void SetStateProvider(IEstimatedStateProvider provider) => stateProvider = provider;
+
     [Header("Tactical Speed Override")]
     private bool isSpeedOverrideActive = false;
     private float speedOverrideRatio = 1.0f;
@@ -336,17 +399,20 @@ public class PathFollower : MonoBehaviour
             headingErrorDeg = Quaternion.Angle(Quaternion.Euler(0f, currentYaw, 0f), targetYawRotation);
         }
 
+        // Estimator health check: If estimator failed, halt flight immediately
+        if (stateProvider != null && stateProvider.CurrentState.Status == EstimatorStatus.Failed)
+        {
+            StopFollowing();
+            return;
+        }
+
         // Check for speed override expiration
         if (isSpeedOverrideActive && Time.time >= speedOverrideEndTime)
         {
             ClearSpeedOverride();
         }
 
-        float effectiveCruiseSpeed = moveSpeed;
-        if (IsSpeedOverrideActive)
-        {
-            effectiveCruiseSpeed = Mathf.Max(0.5f, moveSpeed * speedOverrideRatio);
-        }
+        float effectiveCruiseSpeed = EffectiveCruiseSpeed;
 
         // 2. Adaptive Cornering Target Speed (Immediate Heading Deviation + Lookahead Anticipation)
         float cornerFactor = Mathf.Clamp01(Mathf.Cos(headingErrorDeg * Mathf.Deg2Rad));
