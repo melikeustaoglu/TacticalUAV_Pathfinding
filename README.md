@@ -1,102 +1,98 @@
 # Tactical UAV Pathfinding — Autonomy Simulation Prototype
 
-*[Read this in English](README.en.md)*
+A Unity-based prototype simulating tactical UAV route planning and threat
+avoidance under dynamic threats and uncertain sensor data. The project was
+developed as part of an internship at Selçuk University Teknokent.
 
-Unity tabanlı, taktik bir İHA'nın (UAV) dinamik tehditler ve belirsiz sensör
-verisi altında rota planlaması ve tehdit kaçınması yapmasını simüle eden bir
-otonomi prototipi. Proje, Selçuk Üniversitesi Teknokent bünyesindeki staj
-kapsamında geliştirilmiştir.
+## Project Purpose
 
-## Projenin Amacı
-
-Sistem, tek bir "en kısa yolu bul" algoritmasından ibaret değildir. Amaç,
-gerçek bir otonom sistemde bulunan uçtan uca zinciri simüle etmektir:
+The system is not a single "find the shortest path" algorithm. The goal is
+to simulate the full end-to-end chain found in a real autonomous system:
 
 ```
 Sensor → State Estimation → Tracking → Threat Assessment → Replanning → PathFollower → Mission/Telemetry
 ```
 
-Bu zincirin her halkası ayrı ayrı geliştirilmiş ve test edilmiştir.
+Each link in this chain has been developed and tested individually.
 
-## Mimari
+## Architecture
 
-| Katman | Sorumluluk | Ana dosyalar |
+| Layer | Responsibility | Main files |
 |---|---|---|
-| **Sensors** | GPS, IMU, Barometre, LiDAR, Radar simülasyonu; Gaussian gürültü, sensör arıza enjeksiyonu | `Assets/Scripts/Sensors/` |
-| **State Estimation** | Extended Kalman Filter ile pozisyon/hız/yön tahmini, belirsizlik (covariance) takibi | `Assets/Scripts/StateEstimation/` |
-| **Tracking** | Çoklu hedef takibi, sensör verisi ilişkilendirme (data association), track yaşam döngüsü | `Assets/Scripts/Tracking/` |
-| **Threat Assessment** | TTC/CPA hesaplama, belirsizlik-farkında tehdit skorlama, çoklu tehdit önceliklendirme | `ThreatAssessment.cs` |
-| **Pathfinding & Replanning** | A* tabanlı rota planlama, Velocity Obstacle kaçınma (3 aşamalı: hız düşürme → dikey kaçınma → uzamsal replan) | `Pathfinding.cs`, `ReplanningController.cs` |
-| **Mission** | Görev durumu, skor hesaplama, olay günlüğü | `MissionManager.cs`, `MissionScore.cs`, `MissionEventLogger.cs` |
-| **Diagnostics** | Sahne içi 3D görselleştirme (LiDAR/Radar/tehdit/EKF belirsizliği) | `Assets/Scripts/Diagnostics/` |
+| **Sensors** | GPS, IMU, Barometer, LiDAR, Radar simulation; Gaussian noise, sensor failure injection | `Assets/Scripts/Sensors/` |
+| **State Estimation** | Position/velocity/heading estimation via Extended Kalman Filter, uncertainty (covariance) tracking | `Assets/Scripts/StateEstimation/` |
+| **Tracking** | Multi-target tracking, sensor data association, track lifecycle | `Assets/Scripts/Tracking/` |
+| **Threat Assessment** | TTC/CPA computation, uncertainty-aware threat scoring, multi-threat prioritization | `ThreatAssessment.cs` |
+| **Pathfinding & Replanning** | A*-based route planning, Velocity Obstacle avoidance (3-stage: speed reduction → vertical evasion → spatial replan) | `Pathfinding.cs`, `ReplanningController.cs` |
+| **Mission** | Mission state, score calculation, event logging | `MissionManager.cs`, `MissionScore.cs`, `MissionEventLogger.cs` |
+| **Diagnostics** | In-scene 3D visualization (LiDAR/Radar/threats/EKF uncertainty) | `Assets/Scripts/Diagnostics/` |
 
-## Test ve Doğrulama
+## Testing and Validation
 
-Proje iki katmanlı bir test yapısı kullanır:
+The project uses a two-tier test structure:
 
-- **EditMode testleri** (`Assets/Tests/EditMode/`, 46 dosya) — algoritma
-  birimlerinin izole doğrulanması: pathfinding, EKF, sensör füzyonu, tehdit
-  değerlendirme, çoklu tehdit önceliklendirme, GPS dayanıklılığı.
-- **PlayMode testleri** (`Assets/Tests/PlayMode/`, 3 dosya) — sahne içinde
-  çalışan runtime senaryoları.
+- **EditMode tests** (`Assets/Tests/EditMode/`, 46 files) — isolated
+  validation of algorithm units: pathfinding, EKF, sensor fusion, threat
+  assessment, multi-threat prioritization, GPS resilience.
+- **PlayMode tests** (`Assets/Tests/PlayMode/`, 3 files) — runtime
+  scenarios running in-scene.
 
-Ayrıca `Assets/Editor/BenchmarkSuiteRunner.cs` ve `BenchmarkReporter.cs`
-üzerinden çalışan bir benchmark altyapısı ve `Assets/Scenarios/` altında
-tanımlı senaryo varlıkları (dense obstacles, dynamic threats, long range,
-3D vertical climb vb.) bulunmaktadır.
+There is also a benchmark infrastructure running through
+`Assets/Editor/BenchmarkSuiteRunner.cs` and `BenchmarkReporter.cs`, along
+with scenario assets defined under `Assets/Scenarios/` (dense obstacles,
+dynamic threats, long range, 3D vertical climb, etc.).
 
-**Not — kapsam ve sınırlamalar hakkında dürüst bir açıklama:**
-Benchmark senaryolarının bir kısmı gerçek uçtan uca (end-to-end) production
-senaryolarıdır; bir kısmı ise GPS/belirsizlik matematiğinin veya çoklu tehdit
-mantığının **kontrollü enjeksiyon** ile izole test edilmesidir (örn. gerçek
-zamanlı sürekli bir GPS kesintisi yerine, EKF'e doğrudan covariance/hata
-enjekte edilerek davranış doğrulanmıştır). Bu ayrım kasıtlı olarak
-gizlenmemiştir; hangi senaryonun hangi kategoriye girdiği test dosyası
-isimlerinden ve final raporda anlaşılabilir.
+**Note — an honest note on scope and limitations:**
+Some benchmark scenarios are genuine end-to-end production scenarios; others
+isolate the GPS/uncertainty math or the multi-threat logic using
+**controlled injection** (e.g. instead of a continuous real-time GPS outage,
+covariance/error is injected directly into the EKF to validate the
+resulting behavior). This distinction is not hidden intentionally; which
+scenario falls into which category can be understood from the test file
+names and is spelled out in the final report.
 
-## Kapsam Dışı Kalanlar
+## Out of Scope
 
-- Gerçek fiziksel UAV donanımı üzerinde test (staj kapsamı dışında)
-- Gerçek GPS/IMU/LiDAR/Radar donanımı — tüm sensörler simüle edilmiştir
-- Uzun süreli, sürekli gerçek zamanlı GPS outage benchmark'ı
-- Gerçek zamanlı performans/CPU/frame-budget deployment metrikleri
-- ROS 2 / MAVLink / PX4 gibi gerçek otonomi stack'lerine köprü
+- Testing on real physical UAV hardware (outside internship scope)
+- Real GPS/IMU/LiDAR/Radar hardware — all sensors are simulated
+- Long-duration, continuous real-time GPS outage benchmarking
+- Real-time performance / CPU / frame-budget deployment metrics
+- Bridging to real autonomy stacks such as ROS 2 / MAVLink / PX4
 
-Bu kalemler bilinçli olarak "future work" (gelecek çalışma) olarak
-bırakılmıştır; mimari bu yönde genişlemeye uygun şekilde katmanlandırılmıştır
-(örn. `ISensor` arayüzü, sensör kaynağının gerçek donanımla değiştirilmesine
-izin verir).
+These items were deliberately left as "future work"; the architecture is
+layered in a way that supports this expansion (e.g. the `ISensor` interface
+allows the sensor source to be swapped for real hardware).
 
-## Proje Yapısı
+## Project Structure
 
 ```
 Assets/
-  Scripts/           Ana otonomi kodu (sensör, state estimation, tracking, planning)
+  Scripts/           Core autonomy code (sensors, state estimation, tracking, planning)
     Sensors/
     StateEstimation/
     Tracking/
     Diagnostics/
-  Scenarios/          Benchmark ve test senaryosu ScriptableObject varlıkları
-  Editor/              Benchmark koşucusu (BenchmarkSuiteRunner)
+  Scenarios/          Benchmark and test scenario ScriptableObject assets
+  Editor/              Benchmark runner (BenchmarkSuiteRunner)
   Tests/
-    EditMode/          Birim ve entegrasyon testleri
-    PlayMode/          Runtime/sahne testleri
+    EditMode/          Unit and integration tests
+    PlayMode/          Runtime/scene tests
 ```
 
-## Nasıl Çalıştırılır
+## How to Run
 
-1. Unity Editor ile projeyi açın (Unity 6 / son LTS önerilir).
-2. Test çalıştırmak için: `Window → General → Test Runner`, EditMode ve
-   PlayMode sekmelerinden ilgili testleri seçip çalıştırın.
-3. Benchmark koşusu için: `Assets/Editor/BenchmarkSuiteRunner.cs` üzerinden
-   tanımlı Editor menü komutunu kullanın; sonuçlar `BenchmarkReporter`
-   aracılığıyla raporlanır.
-4. Senaryo denemek için `Assets/Scenarios/` altındaki `.asset` dosyalarından
-   birini seçip ilgili sahneye atayın.
+1. Open the project with Unity Editor (Unity 6 / latest LTS recommended).
+2. To run tests: `Window → General → Test Runner`, select the relevant
+   tests from the EditMode and PlayMode tabs and run them.
+3. To run a benchmark: use the Editor menu command exposed via
+   `Assets/Editor/BenchmarkSuiteRunner.cs`; results are reported through
+   `BenchmarkReporter`.
+4. To try a scenario, pick one of the `.asset` files under
+   `Assets/Scenarios/` and assign it to the relevant scene.
 
-## Geliştirme Notu
+## Development Note
 
-Bu proje geliştirme sürecinde AI destekli araçlar (kod üretimi ve test
-yazımı dahil) kullanılmıştır. Mimari kararlar ve sistem tasarımı
-geliştirici tarafından yönlendirilmiş; üretilen kod ve testler gözden
-geçirilerek entegre edilmiştir.
+AI-assisted tools (including code generation and test writing) were used
+during development. Architecture decisions and system design were directed
+by the developer; generated code and tests were reviewed before being
+integrated into the project.
